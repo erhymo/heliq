@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Heliq writes through trusted Next.js API routes using Firebase Admin SDK.
+    // Client-side Firestore access is intentionally closed in MVP.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
