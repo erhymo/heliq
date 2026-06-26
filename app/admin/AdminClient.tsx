@@ -65,6 +65,13 @@ export default function AdminClient() {
     setData(result.data);
   }
 
+  async function logout() {
+    await fetch("/api/logout", { method: "POST" });
+    setData(null);
+    setPassword("");
+    setError("");
+  }
+
   if (loading) return <Shell><p className="rounded-xl bg-white p-5 shadow-sm">Laster Heliq…</p></Shell>;
   if (!data) return (
     <Shell>
@@ -98,6 +105,7 @@ export default function AdminClient() {
           <HeliqLogo />
           <div className="flex flex-wrap gap-2">
             {(["schedule", "people", "projects", "bases", "quals", "audit"] as Tab[]).map((item) => <button key={item} onClick={() => setTab(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${tab === item ? "bg-slate-900 text-white" : "border border-slate-300 bg-white"}`}>{tabLabel(item)}</button>)}
+            <button onClick={logout} className="rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-800 hover:bg-rose-100">Logg ut</button>
           </div>
         </div>
       </header>

@@ -3,7 +3,8 @@ import { cookies } from "next/headers";
 
 export type Session = { sub: string; role: "admin" | "person"; exp: number };
 
-const ADMIN_COOKIE = "heliq_admin";
+const ADMIN_COOKIE = "heliq_admin_v2";
+export const LEGACY_ADMIN_COOKIES = ["heliq_admin"];
 const PERSON_COOKIE = "heliq_person";
 
 function secret() {
