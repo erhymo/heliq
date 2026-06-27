@@ -9,6 +9,16 @@ type Tab = "schedule" | "people" | "projects" | "bases" | "quals" | "audit";
 
 const statuses = Object.keys(statusLabels) as ScheduleStatus[];
 const todayYear = new Date().getFullYear();
+const PROJECT_COLOR = "#2563eb";
+
+function shortCodeFromText(text: string, fallback = "---") {
+  const clean = text.trim().split(/\s+/).at(-1)?.replace(/[^A-Za-zÆØÅæøå]/g, "") || text.replace(/[^A-Za-zÆØÅæøå]/g, "");
+  return (clean || fallback).slice(0, 3).toUpperCase();
+}
+
+function personCode(person: Pick<Personnel, "name" | "code">) {
+  return shortCodeFromText(person.name, person.code || "---");
+}
 
 function daysInYear(year: number) {
   const days: string[] = [];
@@ -91,7 +101,7 @@ export default function AdminClient() {
     </Shell>
   );
 
-  const people = [...data.personnel].sort((a, b) => a.code.localeCompare(b.code));
+  const people = [...data.personnel].sort((a, b) => (a.role === b.role ? personCode(a).localeCompare(personCode(b)) : a.role === "pilot" ? -1 : 1));
   const assignmentsByKey = new Map(data.assignments.map((assignment) => [`${assignment.personId}_${assignment.date}`, assignment]));
   const days = daysInYear(year);
   const activeProject = data.projects.find((project) => project.id === selectedProjectId);
@@ -162,10 +172,10 @@ function ScheduleGrid({ people, days, data, assignmentsByKey, selectedPersonId, 
   const projectById = new Map(data.projects.map((project) => [project.id, project]));
   const baseById = new Map(data.bases.map((base) => [base.id, base]));
   return (
-    <section className="heliq-grid max-h-[78vh] overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="grid min-w-max" style={{ gridTemplateColumns: `9rem repeat(${people.length}, 5.5rem)` }}>
-        <div className="sticky left-0 top-0 z-20 border-b border-r border-slate-200 bg-slate-100 p-3 text-xs font-bold uppercase text-slate-500">Dato</div>
-        {people.map((person) => <div key={person.id} className={`sticky top-0 z-10 border-b border-r border-slate-200 bg-slate-100 p-2 text-center ${selectedPersonId && selectedPersonId !== person.id ? "opacity-40" : ""}`}><p className="font-bold">{person.code}</p><p className="text-[10px] text-slate-500">{person.role === "ts" ? "TS" : "Pilot"}</p></div>)}
+    <section className="heliq-grid max-h-[82vh] overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="grid min-w-max" style={{ gridTemplateColumns: `7rem repeat(${people.length}, 4.25rem)` }}>
+        <div className="sticky left-0 top-0 z-20 border-b border-r border-slate-200 bg-slate-100 p-2 text-[11px] font-bold uppercase text-slate-500">Dato</div>
+        {people.map((person) => <div key={person.id} className={`sticky top-0 z-10 border-b border-r border-slate-200 bg-slate-100 p-1 text-center ${selectedPersonId && selectedPersonId !== person.id ? "opacity-40" : ""}`}><p className="text-sm font-bold">{personCode(person)}</p><p className="text-[9px] text-slate-500">{person.role === "ts" ? "TS" : "Pilot"}</p></div>)}
         {days.map((day) => <Row key={day} day={day} people={people} assignmentsByKey={assignmentsByKey} projectById={projectById} baseById={baseById} selectedPersonId={selectedPersonId} onCell={onCell} />)}
       </div>
     </section>
@@ -178,8 +188,9 @@ function Row({ day, people, assignmentsByKey, projectById, baseById, selectedPer
     const assignment = assignmentsByKey.get(`${person.id}_${day}`);
     const project = assignment?.projectId ? projectById.get(assignment.projectId) : undefined;
     const base = assignment?.baseId ? baseById.get(assignment.baseId) : undefined;
-    const color = project?.color || base?.color;
-    return <button key={`${person.id}_${day}`} onClick={() => onCell(person, day)} className={`h-12 border-b border-r border-slate-200 p-1 text-center text-[10px] font-bold transition hover:ring-2 hover:ring-blue-400 ${selectedPersonId && selectedPersonId !== person.id ? "opacity-40" : ""}`} style={{ background: color ? `${color}22` : weekend ? "#f8fafc" : "#fff", color: color || "#334155" }}>{assignment ? <><span>{statusShort[assignment.status]}</span><br /><span className="font-medium">{project?.name.slice(0, 8) || base?.code || ""}</span></> : ""}</button>;
+    const color = project ? PROJECT_COLOR : base?.color;
+    const cellCode = project ? shortCodeFromText(project.name) : base?.code || (assignment ? statusShort[assignment.status].slice(0, 3) : "");
+    return <button key={`${person.id}_${day}`} onClick={() => onCell(person, day)} className={`h-8 border-b border-r border-slate-200 p-0.5 text-center text-[10px] font-black transition hover:ring-2 hover:ring-blue-400 ${selectedPersonId && selectedPersonId !== person.id ? "opacity-40" : ""}`} style={{ background: color ? `${color}24` : weekend ? "#f8fafc" : "#fff", color: color || "#334155" }}>{cellCode}</button>;
   })}</>;
 }
 
@@ -225,6 +236,8 @@ function PeoplePanel({ data, mutate }: { data: HeliqData; mutate: (action: strin
   const editing = Boolean(person.id);
   const roleQualifications = data.qualifications.filter((qualification) => qualification.kind === "both" || qualification.kind === person.role);
   const baseLabels = { "": "Ingen", ...Object.fromEntries(data.bases.map((base) => [base.id, `${base.code} · ${base.name}`])) };
+  const pilots = data.personnel.filter((item) => item.role === "pilot").sort((a, b) => personCode(a).localeCompare(personCode(b)));
+  const taskSpecialists = data.personnel.filter((item) => item.role === "ts").sort((a, b) => personCode(a).localeCompare(personCode(b)));
 
   function editPerson(item: Personnel) {
     setPerson({ id: item.id, name: item.name, code: item.code, role: item.role === "admin" ? "pilot" : item.role, active: item.active, homeBaseId: item.homeBaseId || "", phone: item.phone || "", email: item.email || "", qualificationIds: item.qualificationIds || [], adr: Boolean(item.adr), vehicleIds: item.vehicleIds || [], trailerIds: item.trailerIds || [], note: item.note || "", pin: "" });
@@ -241,15 +254,15 @@ function PeoplePanel({ data, mutate }: { data: HeliqData; mutate: (action: strin
       <form onSubmit={savePerson} className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="font-semibold">{editing ? `Rediger ${person.code}` : "Legg til person"}</h3>
-            <p className="text-sm text-slate-600">Trykk på en pilot eller lastemann under for å redigere rolle og kvalifikasjoner.</p>
+            <h3 className="font-semibold">{editing ? `Rediger ${person.name}` : "Legg til person"}</h3>
+            <p className="text-sm text-slate-600">Kode lages automatisk fra de tre første bokstavene i etternavnet. Piloter står til venstre, TS til høyre.</p>
           </div>
           {editing && <button type="button" onClick={() => setPerson(emptyPersonForm)} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold">Avbryt</button>}
         </div>
 
         <div className="grid gap-3 md:grid-cols-4">
           <Input label="Navn" value={person.name} onChange={(v) => setPerson({ ...person, name: v })} />
-          <Input label="Kode" value={person.code} onChange={(v) => setPerson({ ...person, code: v.toUpperCase().slice(0, 3) })} />
+          <div className="rounded-xl border border-slate-200 bg-white px-3 py-2"><p className="text-sm font-semibold text-slate-600">Kode</p><p className="mt-1 text-lg font-black text-slate-900">{person.name ? shortCodeFromText(person.name) : person.code || "—"}</p></div>
           <Select label="Rolle" value={person.role} onChange={(v) => setPerson({ ...person, role: v as Exclude<Role, "admin">, qualificationIds: person.qualificationIds.filter((id) => data.qualifications.some((q) => q.id === id && (q.kind === "both" || q.kind === v))) })} options={["pilot", "ts"]} labels={{ pilot: "Pilot", ts: "Lastemann/TS" }} />
           <Select label="Hovedbase" value={person.homeBaseId} onChange={(v) => setPerson({ ...person, homeBaseId: v })} options={["", ...data.bases.map((base) => base.id)]} labels={baseLabels} />
           <Input label="Telefon" value={person.phone} onChange={(v) => setPerson({ ...person, phone: v })} />
@@ -272,7 +285,10 @@ function PeoplePanel({ data, mutate }: { data: HeliqData; mutate: (action: strin
         <button className="w-fit rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white">{editing ? "Lagre endringer" : "Legg til"}</button>
       </form>
 
-      <CardGrid>{data.personnel.map((item) => <PersonCard key={item.id} person={item} data={data} selected={item.id === person.id} onClick={() => editPerson(item)} />)}</CardGrid>
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <section><h3 className="mb-2 text-sm font-bold uppercase tracking-[0.18em] text-slate-500">Piloter</h3><div className="grid gap-3">{pilots.map((item) => <PersonCard key={item.id} person={item} data={data} selected={item.id === person.id} onClick={() => editPerson(item)} />)}</div></section>
+        <section><h3 className="mb-2 text-sm font-bold uppercase tracking-[0.18em] text-slate-500">Lastemenn/TS</h3><div className="grid gap-3">{taskSpecialists.map((item) => <PersonCard key={item.id} person={item} data={data} selected={item.id === person.id} onClick={() => editPerson(item)} />)}</div></section>
+      </div>
     </Panel>
   );
 }
@@ -284,12 +300,12 @@ function CheckboxList({ title, items, selected, onChange, emptyText }: { title: 
 function PersonCard({ person, data, selected, onClick }: { person: Personnel; data: HeliqData; selected: boolean; onClick: () => void }) {
   const qualificationNames = person.qualificationIds.map((id) => data.qualifications.find((qualification) => qualification.id === id)?.name).filter(Boolean).join(", ");
   const base = data.bases.find((item) => item.id === person.homeBaseId);
-  return <button type="button" onClick={onClick} className={`rounded-xl border bg-slate-50 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50 ${selected ? "border-blue-600 ring-2 ring-blue-100" : "border-slate-200"}`}><h3 className="font-semibold">{person.code} · {person.name}</h3><p className="mt-1 text-sm text-slate-600">{person.role === "ts" ? "Lastemann/TS" : "Pilot"}{base ? ` · ${base.code}` : ""}{person.active ? "" : " · Inaktiv"}</p><p className="mt-2 text-xs text-slate-500">{qualificationNames || "Ingen kvalifikasjoner"}</p></button>;
+  return <button type="button" onClick={onClick} className={`rounded-xl border bg-slate-50 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50 ${selected ? "border-blue-600 ring-2 ring-blue-100" : "border-slate-200"}`}><h3 className="font-semibold">{personCode(person)} · {person.name}</h3><p className="mt-1 text-sm text-slate-600">{person.role === "ts" ? "Lastemann/TS" : "Pilot"}{base ? ` · ${base.code}` : ""}{person.active ? "" : " · Inaktiv"}</p><p className="mt-2 text-xs text-slate-500">{qualificationNames || "Ingen kvalifikasjoner"}</p></button>;
 }
 
 function ProjectsPanel({ data, mutate }: { data: HeliqData; mutate: (action: string, payload: Record<string, unknown>) => Promise<void> }) {
   const [project, setProject] = useState({ name: "", location: "", color: "#1d4ed8", minPilots: 1, minTs: 1, startDate: new Date().toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10) });
-  return <Panel title="Prosjekter"><form onSubmit={(e) => { e.preventDefault(); mutate("upsertProject", { project }); }} className="grid gap-3 md:grid-cols-7"><Input label="Navn" value={project.name} onChange={(v) => setProject({ ...project, name: v })} /><Input label="Lokasjon" value={project.location} onChange={(v) => setProject({ ...project, location: v })} /><Input label="Start" type="date" value={project.startDate} onChange={(v) => setProject({ ...project, startDate: v })} /><Input label="Slutt" type="date" value={project.endDate} onChange={(v) => setProject({ ...project, endDate: v })} /><Input label="Piloter" type="number" value={String(project.minPilots)} onChange={(v) => setProject({ ...project, minPilots: Number(v) })} /><Input label="TS" type="number" value={String(project.minTs)} onChange={(v) => setProject({ ...project, minTs: Number(v) })} /><button className="self-end rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">Lagre</button></form><CardGrid>{data.projects.map((p) => <InfoCard key={p.id} title={p.name} text={`${p.location} · ${p.minPilots} pilot / ${p.minTs} TS`} color={p.color} />)}</CardGrid></Panel>;
+  return <Panel title="Prosjekter"><form onSubmit={(e) => { e.preventDefault(); mutate("upsertProject", { project }); }} className="grid gap-3 md:grid-cols-7"><Input label="Navn" value={project.name} onChange={(v) => setProject({ ...project, name: v })} /><Input label="Lokasjon" value={project.location} onChange={(v) => setProject({ ...project, location: v })} /><Input label="Start" type="date" value={project.startDate} onChange={(v) => setProject({ ...project, startDate: v })} /><Input label="Slutt" type="date" value={project.endDate} onChange={(v) => setProject({ ...project, endDate: v })} /><Input label="Piloter" type="number" value={String(project.minPilots)} onChange={(v) => setProject({ ...project, minPilots: Number(v) })} /><Input label="TS" type="number" value={String(project.minTs)} onChange={(v) => setProject({ ...project, minTs: Number(v) })} /><button className="self-end rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">Lagre</button></form><CardGrid>{data.projects.map((p) => <InfoCard key={p.id} title={`${shortCodeFromText(p.name)} · ${p.name}`} text={`${p.location} · ${p.minPilots} pilot / ${p.minTs} TS`} color={PROJECT_COLOR} />)}</CardGrid></Panel>;
 }
 
 type BaseForm = { id?: string; name: string; code: string; color: string; minPilots: number; minTs: number; pilotIds: string[]; tsIds: string[]; note: string };

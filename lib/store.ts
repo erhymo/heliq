@@ -9,6 +9,14 @@ const localPath = process.env.VERCEL
   ? path.join("/tmp", "heliq.local.json")
   : path.join(process.cwd(), "data", "heliq.local.json");
 const collections = ["personnel", "bases", "projects", "qualifications", "assignments", "auditLogs"] as const;
+const DEFAULT_PROJECT_COLOR = "#2563eb";
+
+function codeFromLastName(name?: string) {
+  const fallback = "NY";
+  const lastName = (name || "").trim().split(/\s+/).filter(Boolean).at(-1) || fallback;
+  const clean = lastName.replace(/[^A-Za-zÆØÅæøå]/g, "");
+  return (clean || fallback).slice(0, 3).toUpperCase();
+}
 
 function mode() {
   return getAdminDb() ? "firestore" as const : "local" as const;
@@ -90,7 +98,8 @@ export async function upsertPersonnel(input: Partial<Personnel> & { pin?: string
   const existing = data.personnel.find((person) => person.id === id);
   const pinHash = input.pin ? hashPin(input.pin) : existing?.pinHash;
   if (pinHash && data.personnel.some((person) => person.id !== id && person.pinHash === pinHash)) throw new Error("PIN-koden er allerede i bruk");
-  const item: Personnel = { id, name: input.name || "Ny ansatt", code: (input.code || "NY").toUpperCase().slice(0, 3), role: input.role || "pilot", active: input.active ?? true, homeBaseId: input.homeBaseId, phone: input.phone || "", email: input.email || "", qualificationIds: input.qualificationIds || [], adr: input.adr || false, vehicleIds: input.vehicleIds || [], trailerIds: input.trailerIds || [], note: input.note || "", pinHash };
+  const name = input.name || "Ny ansatt";
+  const item: Personnel = { id, name, code: codeFromLastName(name), role: input.role || "pilot", active: input.active ?? true, homeBaseId: input.homeBaseId, phone: input.phone || "", email: input.email || "", qualificationIds: input.qualificationIds || [], adr: input.adr || false, vehicleIds: input.vehicleIds || [], trailerIds: input.trailerIds || [], note: input.note || "", pinHash };
   data.personnel = [item, ...data.personnel.filter((person) => person.id !== id)];
   await audit(data, actor, existing ? "update" : "create", id, `${item.code} ${existing ? "oppdatert" : "opprettet"}`);
   if (getAdminDb()) await writeCollectionDoc("personnel", item); else await writeLocal(data);
@@ -137,7 +146,7 @@ export async function upsertBaseWithMembership(input: Partial<Base> & { pilotIds
 export async function upsertProject(input: Partial<Project>, actor: string) {
   const data = await getHeliqData();
   const id = input.id || newId("project");
-  const item: Project = { id, name: input.name || "Nytt prosjekt", customer: input.customer || "", location: input.location || "Egen lokasjon", color: input.color || "#1d4ed8", startDate: input.startDate || new Date().toISOString().slice(0, 10), endDate: input.endDate || new Date().toISOString().slice(0, 10), minPilots: Number(input.minPilots ?? 1), minTs: Number(input.minTs ?? 1), requiredPilotQualificationIds: input.requiredPilotQualificationIds || [], requiredTsQualificationIds: input.requiredTsQualificationIds || [], note: input.note || "" };
+  const item: Project = { id, name: input.name || "Nytt prosjekt", customer: input.customer || "", location: input.location || "Egen lokasjon", color: DEFAULT_PROJECT_COLOR, startDate: input.startDate || new Date().toISOString().slice(0, 10), endDate: input.endDate || new Date().toISOString().slice(0, 10), minPilots: Number(input.minPilots ?? 1), minTs: Number(input.minTs ?? 1), requiredPilotQualificationIds: input.requiredPilotQualificationIds || [], requiredTsQualificationIds: input.requiredTsQualificationIds || [], note: input.note || "" };
   data.projects = [item, ...data.projects.filter((project) => project.id !== id)];
   await audit(data, actor, "upsert", id, `Prosjekt ${item.name} lagret`);
   if (getAdminDb()) await writeCollectionDoc("projects", item); else await writeLocal(data);
