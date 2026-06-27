@@ -9,13 +9,16 @@ type Tab = "schedule" | "people" | "projects" | "bases" | "quals" | "audit";
 type CoverageProposalAssignment = { personId: string; date: string; baseId: string; note?: string };
 type CoverageProposal = {
   id: string;
-  date: string;
+  startDate: string;
+  endDate: string;
   baseId: string;
   baseCode: string;
+  crewLabel: string;
   missingPilots: number;
   missingTs: number;
   pilotNames: string[];
   tsNames: string[];
+  warnings: string[];
   assignments: CoverageProposalAssignment[];
 };
 
@@ -45,6 +48,19 @@ function daysInYear(year: number) {
 function prettyDate(iso: string) {
   const date = new Date(`${iso}T00:00:00`);
   return date.toLocaleDateString("no-NO", { day: "2-digit", month: "short", weekday: "short" });
+}
+
+function addDays(iso: string, days: number) {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function mondayOnOrBefore(iso: string) {
+  const date = new Date(`${iso}T00:00:00Z`);
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() - (day - 1));
+  return date.toISOString().slice(0, 10);
 }
 
 export default function AdminClient() {
@@ -226,43 +242,87 @@ function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Se
   const today = new Date().toISOString().slice(0, 10);
   const activePeople = data.personnel.filter((person) => person.active && (person.role === "pilot" || person.role === "ts"));
   const assignmentsByPersonDate = new Map(data.assignments.map((assignment) => [`${assignment.personId}_${assignment.date}`, assignment]));
-  const assignmentsForYear = data.assignments.filter((assignment) => days.includes(assignment.date));
-  const workload = new Map<string, number>();
-  for (const person of activePeople) workload.set(person.id, assignmentsForYear.filter((assignment) => assignment.personId === person.id).length);
+  const yearDays = new Set(days);
+  const year = days[0]?.slice(0, 4) || String(todayYear);
+  const firstBlockStart = mondayOnOrBefore(`${year}-01-01`);
+  const lastDay = days.at(-1) || `${year}-12-31`;
+  const futureStart = today > `${year}-01-01` ? today : `${year}-01-01`;
 
-  function availableFor(base: Base, role: "pilot" | "ts", date: string, needed: number) {
-    return activePeople
-      .filter((person) => person.role === role && person.homeBaseId === base.id && !assignmentsByPersonDate.has(`${person.id}_${date}`))
-      .sort((a, b) => (workload.get(a.id) || 0) - (workload.get(b.id) || 0) || personCode(a).localeCompare(personCode(b)))
-      .slice(0, needed);
+  function qualifiedForBase(person: Personnel, base: Base) {
+    return base.requiredQualificationIds.every((id) => person.qualificationIds.includes(id));
+  }
+
+  function personHasConflict(personId: string, blockDays: string[]) {
+    return blockDays.some((date) => assignmentsByPersonDate.has(`${personId}_${date}`));
+  }
+
+  function roleCount(base: Base, date: string, role: "pilot" | "ts") {
+    return data.assignments
+      .filter((assignment) => assignment.date === date && assignment.baseId === base.id)
+      .map((assignment) => data.personnel.find((person) => person.id === assignment.personId))
+      .filter((person): person is Personnel => person !== undefined && person.role === role).length;
+  }
+
+  function candidatePool(base: Base, role: "pilot" | "ts", blockDays: string[], crewIndex: number, required: number) {
+    const homeBase = activePeople.filter((person) => person.role === role && person.homeBaseId === base.id && qualifiedForBase(person, base));
+    const borrowed = activePeople.filter((person) => person.role === role && person.homeBaseId !== base.id && qualifiedForBase(person, base));
+    const sorted = [...homeBase, ...borrowed].filter((person) => !personHasConflict(person.id, blockDays));
+    const homeBaseCount = homeBase.length;
+    const neededForRotation = Math.max(required * 2, required);
+    const rotated = sorted.slice().sort((a, b) => personCode(a).localeCompare(personCode(b)));
+    const start = required === 0 ? 0 : (crewIndex * required) % Math.max(rotated.length, 1);
+    const ordered = [...rotated.slice(start), ...rotated.slice(0, start)];
+    return {
+      selected: ordered.slice(0, required),
+      enoughHomeBaseFor1414: homeBaseCount >= neededForRotation,
+      enoughTotalFor1414: sorted.length >= neededForRotation,
+    };
   }
 
   const proposals: CoverageProposal[] = [];
-  for (const date of days.filter((day) => day >= today)) {
-    const dateAssignments = data.assignments.filter((assignment) => assignment.date === date && assignment.baseId);
+  for (let blockStart = firstBlockStart, blockIndex = 0; blockStart <= lastDay; blockStart = addDays(blockStart, 14), blockIndex += 1) {
+    const rawBlockDays = Array.from({ length: 14 }, (_, index) => addDays(blockStart, index));
+    const blockDays = rawBlockDays.filter((date) => yearDays.has(date) && date >= futureStart);
+    if (blockDays.length === 0) continue;
+    const blockEnd = blockDays.at(-1) || blockStart;
+
     for (const base of data.bases) {
-      const baseAssignments = dateAssignments.filter((assignment) => assignment.baseId === base.id);
-      const peopleOnBase = baseAssignments.map((assignment) => data.personnel.find((person) => person.id === assignment.personId)).filter(Boolean) as Personnel[];
-      const missingPilots = Math.max(0, base.minPilots - peopleOnBase.filter((person) => person.role === "pilot").length);
-      const missingTs = Math.max(0, base.minTs - peopleOnBase.filter((person) => person.role === "ts").length);
-      if (missingPilots === 0 && missingTs === 0) continue;
+      const pilotPool = candidatePool(base, "pilot", blockDays, blockIndex, base.minPilots);
+      const tsPool = candidatePool(base, "ts", blockDays, blockIndex, base.minTs);
+      const assignments: CoverageProposalAssignment[] = [];
+      const missingPilotDays = blockDays.filter((date) => roleCount(base, date, "pilot") < base.minPilots);
+      const missingTsDays = blockDays.filter((date) => roleCount(base, date, "ts") < base.minTs);
 
-      const pilots = availableFor(base, "pilot", date, missingPilots);
-      const taskSpecialists = availableFor(base, "ts", date, missingTs);
-      if (pilots.length !== missingPilots || taskSpecialists.length !== missingTs) continue;
+      for (const date of missingPilotDays) {
+        const missing = Math.max(0, base.minPilots - roleCount(base, date, "pilot"));
+        assignments.push(...pilotPool.selected.slice(0, missing).map((person) => ({ personId: person.id, date, baseId: base.id, note: `14/14-forslag for ${base.code}` })));
+      }
+      for (const date of missingTsDays) {
+        const missing = Math.max(0, base.minTs - roleCount(base, date, "ts"));
+        assignments.push(...tsPool.selected.slice(0, missing).map((person) => ({ personId: person.id, date, baseId: base.id, note: `14/14-forslag for ${base.code}` })));
+      }
+      if (assignments.length === 0) continue;
 
-      const id = `${base.id}_${date}_${pilots.map((person) => person.id).join("-")}_${taskSpecialists.map((person) => person.id).join("-")}`;
+      const warnings: string[] = [];
+      if (!pilotPool.enoughHomeBaseFor1414 && base.minPilots > 0) warnings.push("Ikke nok hjemmebase-piloter til ren 14/14. Foreslår kvalifiserte tilgjengelige piloter hvis mulig.");
+      if (!tsPool.enoughHomeBaseFor1414 && base.minTs > 0) warnings.push("Ikke nok hjemmebase-TS til ren 14/14. Foreslår kvalifiserte tilgjengelige TS hvis mulig.");
+      if (pilotPool.selected.length < base.minPilots || tsPool.selected.length < base.minTs) warnings.push("Mangler fortsatt nok ledige/kvalifiserte personer til å fylle hele perioden.");
+
+      const id = `${base.id}_${blockStart}_${pilotPool.selected.map((person) => person.id).join("-")}_${tsPool.selected.map((person) => person.id).join("-")}`;
       if (dismissed.has(id)) continue;
       proposals.push({
         id,
-        date,
+        startDate: blockDays[0],
+        endDate: blockEnd,
         baseId: base.id,
         baseCode: base.code,
-        missingPilots,
-        missingTs,
-        pilotNames: pilots.map((person) => `${personCode(person)} ${person.name}`),
-        tsNames: taskSpecialists.map((person) => `${personCode(person)} ${person.name}`),
-        assignments: [...pilots, ...taskSpecialists].map((person) => ({ personId: person.id, date, baseId: base.id, note: `Dekningsforslag for ${base.code}` })),
+        crewLabel: blockIndex % 2 === 0 ? "Crew A" : "Crew B",
+        missingPilots: missingPilotDays.length,
+        missingTs: missingTsDays.length,
+        pilotNames: pilotPool.selected.map((person) => `${personCode(person)} ${person.name}`),
+        tsNames: tsPool.selected.map((person) => `${personCode(person)} ${person.name}`),
+        warnings,
+        assignments,
       });
     }
   }
@@ -279,7 +339,7 @@ function CoverageSuggestions({ suggestions, totalHidden, onApprove, onDismiss }:
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-semibold text-blue-950">Forslag til full basedekning</h2>
-          <p className="mt-1 text-sm text-blue-800">Systemet foreslår kun personer fra samme hjemmebase som er ledige den dagen. Admin må godkjenne eller avvise.</p>
+          <p className="mt-1 text-sm text-blue-800">Systemet foreslår 14/14-turnusblokker med bytte mandag og avgang søndag. Admin må godkjenne eller avvise.</p>
         </div>
         <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-blue-900">{suggestions.length} forslag</span>
       </div>
@@ -287,12 +347,14 @@ function CoverageSuggestions({ suggestions, totalHidden, onApprove, onDismiss }:
         {visible.map((suggestion) => (
           <article key={suggestion.id} className="rounded-xl border border-blue-100 bg-white p-3 text-sm shadow-sm">
             <div className="flex items-start justify-between gap-2">
-              <div><p className="font-bold text-slate-950">{suggestion.baseCode} · {prettyDate(suggestion.date)}</p><p className="text-slate-600">Mangler {suggestion.missingPilots} pilot / {suggestion.missingTs} TS</p></div>
-              <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-bold text-blue-800">{suggestion.assignments.length} pers.</span>
+              <div><p className="font-bold text-slate-950">{suggestion.baseCode} · {suggestion.crewLabel}</p><p className="text-slate-600">{prettyDate(suggestion.startDate)} – {prettyDate(suggestion.endDate)}</p></div>
+              <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-bold text-blue-800">{suggestion.assignments.length} dager</span>
             </div>
             <div className="mt-2 space-y-1 text-xs text-slate-600">
+              <p><span className="font-semibold text-slate-800">Hull:</span> {suggestion.missingPilots} pilotdager / {suggestion.missingTs} TS-dager</p>
               {suggestion.pilotNames.length > 0 && <p><span className="font-semibold text-slate-800">Piloter:</span> {suggestion.pilotNames.join(", ")}</p>}
               {suggestion.tsNames.length > 0 && <p><span className="font-semibold text-slate-800">TS:</span> {suggestion.tsNames.join(", ")}</p>}
+              {suggestion.warnings.map((warning) => <p key={warning} className="rounded-lg bg-amber-50 p-2 text-amber-800">{warning}</p>)}
             </div>
             <div className="mt-3 flex gap-2">
               <button onClick={() => onApprove(suggestion)} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white">OK, legg inn</button>
