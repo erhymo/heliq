@@ -29,6 +29,7 @@ export default function AdminClient() {
   const [data, setData] = useState<HeliqData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [tab, setTab] = useState<Tab>("schedule");
   const [year, setYear] = useState(todayYear);
@@ -51,8 +52,10 @@ export default function AdminClient() {
   async function login(event: FormEvent) {
     event.preventDefault();
     setError("");
-    const response = await fetch("/api/admin/login", { method: "POST", body: JSON.stringify({ password }) });
-    if (!response.ok) { setError("Feil adminpassord"); return; }
+    const response = await fetch("/api/admin/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+    const result = await response.json();
+    if (!response.ok) { setError(result.error || "Feil innlogging"); return; }
+    setEmail("");
     setPassword("");
     await load();
   }
@@ -68,6 +71,7 @@ export default function AdminClient() {
   async function logout() {
     await fetch("/api/logout", { method: "POST" });
     setData(null);
+    setEmail("");
     setPassword("");
     setError("");
   }
@@ -78,8 +82,9 @@ export default function AdminClient() {
       <form onSubmit={login} className="mx-auto w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <HeliqLogo />
         <h1 className="mt-6 text-xl font-semibold">Admin-login</h1>
-        <p className="mt-2 text-sm text-slate-600">Standard lokalt passord er <span className="font-mono">heliq-admin</span> til du setter miljøvariabel.</p>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="mt-5 w-full rounded-xl border border-slate-300 px-4 py-3" placeholder="Adminpassord" />
+        <p className="mt-2 text-sm text-slate-600">Logg inn med Firebase Authentication-brukeren din. Lokal fallback bruker kun passord hvis Firebase web API key ikke er satt.</p>
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="mt-5 w-full rounded-xl border border-slate-300 px-4 py-3" placeholder="E-post / brukernavn" autoComplete="username" />
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="mt-3 w-full rounded-xl border border-slate-300 px-4 py-3" placeholder="Passord" autoComplete="current-password" />
         {error && <p className="mt-3 text-sm text-rose-700">{error}</p>}
         <button className="mt-4 w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">Logg inn</button>
       </form>
