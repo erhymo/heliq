@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAdminSession } from "@/lib/security";
-import { seedDemo, toggleAssignment, upsertBase, upsertBaseWithMembership, upsertPersonnel, upsertProject, upsertQualification } from "@/lib/store";
+import { applyCoverageAssignments, seedDemo, toggleAssignment, upsertBase, upsertBaseWithMembership, upsertPersonnel, upsertProject, upsertQualification } from "@/lib/store";
 
 export async function POST(request: Request) {
   const session = await getAdminSession();
@@ -15,6 +15,7 @@ export async function POST(request: Request) {
     if (body.action === "upsertProject") return NextResponse.json({ data: await upsertProject(body.project, actor) });
     if (body.action === "upsertQualification") return NextResponse.json({ data: await upsertQualification(body.qualification, actor) });
     if (body.action === "toggleAssignment") return NextResponse.json({ data: await toggleAssignment(body.assignment, actor) });
+    if (body.action === "applyCoverageAssignments") return NextResponse.json({ data: await applyCoverageAssignments(body, actor) });
     return NextResponse.json({ error: "Ukjent handling" }, { status: 400 });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Ukjent feil" }, { status: 400 });

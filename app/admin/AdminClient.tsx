@@ -6,6 +6,18 @@ import type { Base, HeliqData, Personnel, Project, QualificationKind, Role, Sche
 import { statusLabels, statusShort } from "@/lib/types";
 
 type Tab = "schedule" | "people" | "projects" | "bases" | "quals" | "audit";
+type CoverageProposalAssignment = { personId: string; date: string; baseId: string; note?: string };
+type CoverageProposal = {
+  id: string;
+  date: string;
+  baseId: string;
+  baseCode: string;
+  missingPilots: number;
+  missingTs: number;
+  pilotNames: string[];
+  tsNames: string[];
+  assignments: CoverageProposalAssignment[];
+};
 
 const statuses = Object.keys(statusLabels) as ScheduleStatus[];
 const todayYear = new Date().getFullYear();
@@ -44,11 +56,13 @@ export default function AdminClient() {
   const [tab, setTab] = useState<Tab>("schedule");
   const [year, setYear] = useState(todayYear);
   const [selectedPersonId, setSelectedPersonId] = useState("");
-  const [selectedStatus, setSelectedStatus] = useState<ScheduleStatus>("project");
+  const [selectedStatus, setSelectedStatus] = useState<ScheduleStatus>("work");
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedBaseId, setSelectedBaseId] = useState("");
+  const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState<string[]>([]);
 
   useEffect(() => { load(); }, []);
+  const coverageSuggestions = useMemo(() => data ? buildCoverageSuggestions(data, daysInYear(year), new Set(dismissedSuggestionIds)) : [], [data, year, dismissedSuggestionIds]);
 
   async function load() {
     setLoading(true);
@@ -110,7 +124,20 @@ export default function AdminClient() {
 
   async function clickCell(person: Personnel, date: string) {
     if (selectedPersonId && selectedPersonId !== person.id) return;
-    await mutate("toggleAssignment", { assignment: { personId: person.id, date, status: selectedStatus, projectId: selectedProjectId || undefined, baseId: selectedBaseId || undefined } });
+    const projectId = selectedProjectId || undefined;
+    const status = projectId ? "project" : selectedStatus === "project" ? "work" : selectedStatus;
+    const shouldUseBase = Boolean(selectedBaseId) || status === "work";
+    const baseId = projectId ? undefined : selectedBaseId || (shouldUseBase ? person.homeBaseId : undefined);
+    await mutate("toggleAssignment", { assignment: { personId: person.id, date, status, projectId, baseId } });
+  }
+
+  async function approveCoverageSuggestion(suggestion: CoverageProposal) {
+    await mutate("applyCoverageAssignments", { assignments: suggestion.assignments });
+    setDismissedSuggestionIds((ids) => [...ids, suggestion.id]);
+  }
+
+  function dismissCoverageSuggestion(suggestionId: string) {
+    setDismissedSuggestionIds((ids) => [...ids, suggestionId]);
   }
 
   return (
@@ -131,6 +158,7 @@ export default function AdminClient() {
         </div>
         {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
         {tab === "schedule" && <ScheduleToolbar data={data} year={year} setYear={setYear} selectedPersonId={selectedPersonId} setSelectedPersonId={setSelectedPersonId} selectedStatus={selectedStatus} setSelectedStatus={setSelectedStatus} selectedProjectId={selectedProjectId} setSelectedProjectId={setSelectedProjectId} selectedBaseId={selectedBaseId} setSelectedBaseId={setSelectedBaseId} />}
+        {tab === "schedule" && <CoverageSuggestions suggestions={coverageSuggestions} totalHidden={Math.max(0, coverageSuggestions.length - 30)} onApprove={approveCoverageSuggestion} onDismiss={dismissCoverageSuggestion} />}
         {tab === "schedule" && warnings.length > 0 && <Warnings warnings={warnings} />}
         {tab === "schedule" && <ScheduleGrid people={people} days={days} data={data} assignmentsByKey={assignmentsByKey} selectedPersonId={selectedPersonId} onCell={clickCell} activeProject={activeProject} activeBase={activeBase} />}
         {tab === "people" && <PeoplePanel data={data} mutate={mutate} />}
@@ -157,9 +185,9 @@ function ScheduleToolbar(props: { data: HeliqData; year: number; setYear: (y: nu
       <Select label="År" value={String(props.year)} onChange={(v) => props.setYear(Number(v))} options={[todayYear - 1, todayYear, todayYear + 1].map(String)} />
       <Select label="Ansatt" value={props.selectedPersonId} onChange={props.setSelectedPersonId} options={["", ...props.data.personnel.map((p) => p.id)]} labels={{ "": "Klikk alle", ...Object.fromEntries(props.data.personnel.map((p) => [p.id, `${p.code} ${p.name}`])) }} />
       <Select label="Status" value={props.selectedStatus} onChange={(v) => props.setSelectedStatus(v as ScheduleStatus)} options={statuses} labels={statusLabels} />
-      <Select label="Prosjekt" value={props.selectedProjectId} onChange={props.setSelectedProjectId} options={["", ...props.data.projects.map((p) => p.id)]} labels={{ "": "Ingen", ...Object.fromEntries(props.data.projects.map((p) => [p.id, p.name])) }} />
-      <Select label="Base" value={props.selectedBaseId} onChange={props.setSelectedBaseId} options={["", ...props.data.bases.map((b) => b.id)]} labels={{ "": "Ingen", ...Object.fromEntries(props.data.bases.map((b) => [b.id, b.name])) }} />
-      <div className="rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-600">Velg ansatt/prosjekt/status og klikk dager i årsgridet. Klikk samme celle igjen for å fjerne.</div>
+      <Select label="Prosjekt" value={props.selectedProjectId} onChange={props.setSelectedProjectId} options={["", ...props.data.projects.map((p) => p.id)]} labels={{ "": "Ingen prosjekt", ...Object.fromEntries(props.data.projects.map((p) => [p.id, p.name])) }} />
+      <Select label="Base" value={props.selectedBaseId} onChange={props.setSelectedBaseId} options={["", ...props.data.bases.map((b) => b.id)]} labels={{ "": "Personens base", ...Object.fromEntries(props.data.bases.map((b) => [b.id, b.name])) }} />
+      <div className="rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-600">Klikk en dag for jobb på personens base. Velg prosjekt for å overstyre med prosjektkode.</div>
     </section>
   );
 }
@@ -192,6 +220,90 @@ function Row({ day, people, assignmentsByKey, projectById, baseById, selectedPer
     const cellCode = project ? shortCodeFromText(project.name) : base?.code || (assignment ? statusShort[assignment.status].slice(0, 3) : "");
     return <button key={`${person.id}_${day}`} onClick={() => onCell(person, day)} className={`h-8 border-b border-r border-slate-200 p-0.5 text-center text-[10px] font-black transition hover:ring-2 hover:ring-blue-400 ${selectedPersonId && selectedPersonId !== person.id ? "opacity-40" : ""}`} style={{ background: color ? `${color}24` : weekend ? "#f8fafc" : "#fff", color: color || "#334155" }}>{cellCode}</button>;
   })}</>;
+}
+
+function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Set<string>): CoverageProposal[] {
+  const today = new Date().toISOString().slice(0, 10);
+  const activePeople = data.personnel.filter((person) => person.active && (person.role === "pilot" || person.role === "ts"));
+  const assignmentsByPersonDate = new Map(data.assignments.map((assignment) => [`${assignment.personId}_${assignment.date}`, assignment]));
+  const assignmentsForYear = data.assignments.filter((assignment) => days.includes(assignment.date));
+  const workload = new Map<string, number>();
+  for (const person of activePeople) workload.set(person.id, assignmentsForYear.filter((assignment) => assignment.personId === person.id).length);
+
+  function availableFor(base: Base, role: "pilot" | "ts", date: string, needed: number) {
+    return activePeople
+      .filter((person) => person.role === role && person.homeBaseId === base.id && !assignmentsByPersonDate.has(`${person.id}_${date}`))
+      .sort((a, b) => (workload.get(a.id) || 0) - (workload.get(b.id) || 0) || personCode(a).localeCompare(personCode(b)))
+      .slice(0, needed);
+  }
+
+  const proposals: CoverageProposal[] = [];
+  for (const date of days.filter((day) => day >= today)) {
+    const dateAssignments = data.assignments.filter((assignment) => assignment.date === date && assignment.baseId);
+    for (const base of data.bases) {
+      const baseAssignments = dateAssignments.filter((assignment) => assignment.baseId === base.id);
+      const peopleOnBase = baseAssignments.map((assignment) => data.personnel.find((person) => person.id === assignment.personId)).filter(Boolean) as Personnel[];
+      const missingPilots = Math.max(0, base.minPilots - peopleOnBase.filter((person) => person.role === "pilot").length);
+      const missingTs = Math.max(0, base.minTs - peopleOnBase.filter((person) => person.role === "ts").length);
+      if (missingPilots === 0 && missingTs === 0) continue;
+
+      const pilots = availableFor(base, "pilot", date, missingPilots);
+      const taskSpecialists = availableFor(base, "ts", date, missingTs);
+      if (pilots.length !== missingPilots || taskSpecialists.length !== missingTs) continue;
+
+      const id = `${base.id}_${date}_${pilots.map((person) => person.id).join("-")}_${taskSpecialists.map((person) => person.id).join("-")}`;
+      if (dismissed.has(id)) continue;
+      proposals.push({
+        id,
+        date,
+        baseId: base.id,
+        baseCode: base.code,
+        missingPilots,
+        missingTs,
+        pilotNames: pilots.map((person) => `${personCode(person)} ${person.name}`),
+        tsNames: taskSpecialists.map((person) => `${personCode(person)} ${person.name}`),
+        assignments: [...pilots, ...taskSpecialists].map((person) => ({ personId: person.id, date, baseId: base.id, note: `Dekningsforslag for ${base.code}` })),
+      });
+    }
+  }
+  return proposals;
+}
+
+function CoverageSuggestions({ suggestions, totalHidden, onApprove, onDismiss }: { suggestions: CoverageProposal[]; totalHidden: number; onApprove: (suggestion: CoverageProposal) => void; onDismiss: (id: string) => void }) {
+  const visible = suggestions.slice(0, 30);
+  if (suggestions.length === 0) {
+    return <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900"><span className="font-semibold">Dekningsforslag:</span> Alle baser ser dekket ut for valgt år med dagens regler.</section>;
+  }
+  return (
+    <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-blue-950">Forslag til full basedekning</h2>
+          <p className="mt-1 text-sm text-blue-800">Systemet foreslår kun personer fra samme hjemmebase som er ledige den dagen. Admin må godkjenne eller avvise.</p>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-blue-900">{suggestions.length} forslag</span>
+      </div>
+      <div className="mt-3 grid gap-2 lg:grid-cols-2 xl:grid-cols-3">
+        {visible.map((suggestion) => (
+          <article key={suggestion.id} className="rounded-xl border border-blue-100 bg-white p-3 text-sm shadow-sm">
+            <div className="flex items-start justify-between gap-2">
+              <div><p className="font-bold text-slate-950">{suggestion.baseCode} · {prettyDate(suggestion.date)}</p><p className="text-slate-600">Mangler {suggestion.missingPilots} pilot / {suggestion.missingTs} TS</p></div>
+              <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-bold text-blue-800">{suggestion.assignments.length} pers.</span>
+            </div>
+            <div className="mt-2 space-y-1 text-xs text-slate-600">
+              {suggestion.pilotNames.length > 0 && <p><span className="font-semibold text-slate-800">Piloter:</span> {suggestion.pilotNames.join(", ")}</p>}
+              {suggestion.tsNames.length > 0 && <p><span className="font-semibold text-slate-800">TS:</span> {suggestion.tsNames.join(", ")}</p>}
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button onClick={() => onApprove(suggestion)} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white">OK, legg inn</button>
+              <button onClick={() => onDismiss(suggestion.id)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Avvis</button>
+            </div>
+          </article>
+        ))}
+      </div>
+      {totalHidden > 0 && <p className="mt-3 text-xs text-blue-800">Viser de første 30 forslagene. {totalHidden} flere kommer frem etter hvert som du godkjenner eller avviser.</p>}
+    </section>
+  );
 }
 
 function Warnings({ warnings }: { warnings: string[] }) {
@@ -303,9 +415,91 @@ function PersonCard({ person, data, selected, onClick }: { person: Personnel; da
   return <button type="button" onClick={onClick} className={`rounded-xl border bg-slate-50 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50 ${selected ? "border-blue-600 ring-2 ring-blue-100" : "border-slate-200"}`}><h3 className="font-semibold">{personCode(person)} · {person.name}</h3><p className="mt-1 text-sm text-slate-600">{person.role === "ts" ? "Lastemann/TS" : "Pilot"}{base ? ` · ${base.code}` : ""}{person.active ? "" : " · Inaktiv"}</p><p className="mt-2 text-xs text-slate-500">{qualificationNames || "Ingen kvalifikasjoner"}</p></button>;
 }
 
+type ProjectForm = {
+  id?: string;
+  name: string;
+  customer: string;
+  location: string;
+  startDate: string;
+  endDate: string;
+  minPilots: number;
+  minTs: number;
+  requiredPilotQualificationIds: string[];
+  requiredTsQualificationIds: string[];
+  note: string;
+};
+
+const todayIso = new Date().toISOString().slice(0, 10);
+const emptyProjectForm: ProjectForm = { name: "", customer: "", location: "", startDate: todayIso, endDate: todayIso, minPilots: 1, minTs: 1, requiredPilotQualificationIds: [], requiredTsQualificationIds: [], note: "" };
+
 function ProjectsPanel({ data, mutate }: { data: HeliqData; mutate: (action: string, payload: Record<string, unknown>) => Promise<void> }) {
-  const [project, setProject] = useState({ name: "", location: "", color: "#1d4ed8", minPilots: 1, minTs: 1, startDate: new Date().toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10) });
-  return <Panel title="Prosjekter"><form onSubmit={(e) => { e.preventDefault(); mutate("upsertProject", { project }); }} className="grid gap-3 md:grid-cols-7"><Input label="Navn" value={project.name} onChange={(v) => setProject({ ...project, name: v })} /><Input label="Lokasjon" value={project.location} onChange={(v) => setProject({ ...project, location: v })} /><Input label="Start" type="date" value={project.startDate} onChange={(v) => setProject({ ...project, startDate: v })} /><Input label="Slutt" type="date" value={project.endDate} onChange={(v) => setProject({ ...project, endDate: v })} /><Input label="Piloter" type="number" value={String(project.minPilots)} onChange={(v) => setProject({ ...project, minPilots: Number(v) })} /><Input label="TS" type="number" value={String(project.minTs)} onChange={(v) => setProject({ ...project, minTs: Number(v) })} /><button className="self-end rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">Lagre</button></form><CardGrid>{data.projects.map((p) => <InfoCard key={p.id} title={`${shortCodeFromText(p.name)} · ${p.name}`} text={`${p.location} · ${p.minPilots} pilot / ${p.minTs} TS`} color={PROJECT_COLOR} />)}</CardGrid></Panel>;
+  const [project, setProject] = useState<ProjectForm>(emptyProjectForm);
+  const editing = Boolean(project.id);
+  const pilotQualifications = data.qualifications.filter((qualification) => qualification.kind === "pilot" || qualification.kind === "both");
+  const tsQualifications = data.qualifications.filter((qualification) => qualification.kind === "ts" || qualification.kind === "both");
+
+  function editProject(item: Project) {
+    setProject({
+      id: item.id,
+      name: item.name,
+      customer: item.customer || "",
+      location: item.location,
+      startDate: item.startDate,
+      endDate: item.endDate,
+      minPilots: item.minPilots,
+      minTs: item.minTs,
+      requiredPilotQualificationIds: item.requiredPilotQualificationIds || [],
+      requiredTsQualificationIds: item.requiredTsQualificationIds || [],
+      note: item.note || "",
+    });
+  }
+
+  async function saveProject(event: FormEvent) {
+    event.preventDefault();
+    await mutate("upsertProject", { project });
+    setProject(emptyProjectForm);
+  }
+
+  return (
+    <Panel title="Prosjekter">
+      <form onSubmit={saveProject} className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">{editing ? `Rediger ${shortCodeFromText(project.name)}` : "Legg til prosjekt"}</h3>
+            <p className="text-sm text-slate-600">Trykk på et prosjekt under, f.eks. VES, for å redigere bemanning, datoer og krav.</p>
+          </div>
+          {editing && <button type="button" onClick={() => setProject(emptyProjectForm)} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold">Avbryt</button>}
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-6">
+          <Input label="Prosjektnavn" value={project.name} onChange={(v) => setProject({ ...project, name: v })} />
+          <div className="rounded-xl border border-slate-200 bg-white px-3 py-2"><p className="text-sm font-semibold text-slate-600">Kode i schedule</p><p className="mt-1 text-lg font-black text-slate-900">{project.name ? shortCodeFromText(project.name) : "—"}</p></div>
+          <Input label="Kunde/oppdrag" value={project.customer} onChange={(v) => setProject({ ...project, customer: v })} />
+          <Input label="Lokasjon" value={project.location} onChange={(v) => setProject({ ...project, location: v })} />
+          <Input label="Start" type="date" value={project.startDate} onChange={(v) => setProject({ ...project, startDate: v })} />
+          <Input label="Slutt" type="date" value={project.endDate} onChange={(v) => setProject({ ...project, endDate: v })} />
+          <Input label="Antall piloter" type="number" value={String(project.minPilots)} onChange={(v) => setProject({ ...project, minPilots: Number(v) })} />
+          <Input label="Antall TS" type="number" value={String(project.minTs)} onChange={(v) => setProject({ ...project, minTs: Number(v) })} />
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <CheckboxList title="Krav til piloter" items={pilotQualifications.map((qualification) => ({ id: qualification.id, label: qualification.name }))} selected={project.requiredPilotQualificationIds} onChange={(requiredPilotQualificationIds) => setProject({ ...project, requiredPilotQualificationIds })} emptyText="Ingen pilotkvalifikasjoner opprettet." />
+          <CheckboxList title="Krav til lastemann/TS" items={tsQualifications.map((qualification) => ({ id: qualification.id, label: qualification.name }))} selected={project.requiredTsQualificationIds} onChange={(requiredTsQualificationIds) => setProject({ ...project, requiredTsQualificationIds })} emptyText="Ingen TS-kvalifikasjoner opprettet." />
+        </div>
+
+        <Input label="Notat" value={project.note} onChange={(v) => setProject({ ...project, note: v })} />
+        <button className="w-fit rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white">{editing ? "Lagre prosjekt" : "Opprett prosjekt"}</button>
+      </form>
+
+      <CardGrid>{data.projects.map((item) => <ProjectCard key={item.id} project={item} data={data} selected={item.id === project.id} onClick={() => editProject(item)} />)}</CardGrid>
+    </Panel>
+  );
+}
+
+function ProjectCard({ project, data, selected, onClick }: { project: Project; data: HeliqData; selected: boolean; onClick: () => void }) {
+  const pilotRequirements = project.requiredPilotQualificationIds.map((id) => data.qualifications.find((qualification) => qualification.id === id)?.name).filter(Boolean);
+  const tsRequirements = project.requiredTsQualificationIds.map((id) => data.qualifications.find((qualification) => qualification.id === id)?.name).filter(Boolean);
+  return <button type="button" onClick={onClick} className={`rounded-xl border bg-slate-50 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50 ${selected ? "border-blue-600 ring-2 ring-blue-100" : "border-slate-200"}`} style={{ borderLeft: `5px solid ${PROJECT_COLOR}` }}><h3 className="font-semibold">{shortCodeFromText(project.name)} · {project.name}</h3><p className="mt-1 text-sm text-slate-600">{project.location} · {project.minPilots} pilot / {project.minTs} TS</p><p className="mt-2 text-xs text-slate-500">Pilotkrav: {pilotRequirements.join(", ") || "Ingen"}</p><p className="mt-1 text-xs text-slate-500">TS-krav: {tsRequirements.join(", ") || "Ingen"}</p></button>;
 }
 
 type BaseForm = { id?: string; name: string; code: string; color: string; minPilots: number; minTs: number; pilotIds: string[]; tsIds: string[]; note: string };

@@ -175,3 +175,23 @@ export async function toggleAssignment(input: { personId: string; date: string; 
   else await writeLocal(data);
   return publicData(data);
 }
+
+export async function applyCoverageAssignments(input: { assignments: Array<{ personId: string; date: string; baseId: string; note?: string }> }, actor: string) {
+  const data = await getHeliqData();
+  const nextAssignments = input.assignments.map((assignment) => ({
+    id: `${assignment.personId}_${assignment.date}`,
+    personId: assignment.personId,
+    date: assignment.date,
+    status: "work" as ScheduleStatus,
+    baseId: assignment.baseId,
+    note: assignment.note || "Dekningsforslag godkjent",
+    updatedAt: new Date().toISOString(),
+  }));
+  const nextIds = new Set(nextAssignments.map((assignment) => assignment.id));
+  data.assignments = [...nextAssignments, ...data.assignments.filter((assignment) => !nextIds.has(assignment.id))];
+  await audit(data, actor, "applyCoverageSuggestion", "coverage", `${nextAssignments.length} dekningsforslag godkjent`);
+  const db = getAdminDb();
+  if (db) await Promise.all(nextAssignments.map((assignment) => writeCollectionDoc("assignments", assignment)));
+  else await writeLocal(data);
+  return publicData(data);
+}
