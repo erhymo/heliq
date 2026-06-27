@@ -292,9 +292,66 @@ function ProjectsPanel({ data, mutate }: { data: HeliqData; mutate: (action: str
   return <Panel title="Prosjekter"><form onSubmit={(e) => { e.preventDefault(); mutate("upsertProject", { project }); }} className="grid gap-3 md:grid-cols-7"><Input label="Navn" value={project.name} onChange={(v) => setProject({ ...project, name: v })} /><Input label="Lokasjon" value={project.location} onChange={(v) => setProject({ ...project, location: v })} /><Input label="Start" type="date" value={project.startDate} onChange={(v) => setProject({ ...project, startDate: v })} /><Input label="Slutt" type="date" value={project.endDate} onChange={(v) => setProject({ ...project, endDate: v })} /><Input label="Piloter" type="number" value={String(project.minPilots)} onChange={(v) => setProject({ ...project, minPilots: Number(v) })} /><Input label="TS" type="number" value={String(project.minTs)} onChange={(v) => setProject({ ...project, minTs: Number(v) })} /><button className="self-end rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">Lagre</button></form><CardGrid>{data.projects.map((p) => <InfoCard key={p.id} title={p.name} text={`${p.location} · ${p.minPilots} pilot / ${p.minTs} TS`} color={p.color} />)}</CardGrid></Panel>;
 }
 
+type BaseForm = { id?: string; name: string; code: string; color: string; minPilots: number; minTs: number; pilotIds: string[]; tsIds: string[]; note: string };
+
+const emptyBaseForm: BaseForm = { name: "", code: "", color: "#2563eb", minPilots: 1, minTs: 1, pilotIds: [], tsIds: [], note: "" };
+
 function BasesPanel({ data, mutate }: { data: HeliqData; mutate: (action: string, payload: Record<string, unknown>) => Promise<void> }) {
-  const [base, setBase] = useState({ name: "", code: "", color: "#2563eb", minPilots: 1, minTs: 1 });
-  return <Panel title="Baser"><form onSubmit={(e) => { e.preventDefault(); mutate("upsertBase", { base }); }} className="grid gap-3 md:grid-cols-6"><Input label="Navn" value={base.name} onChange={(v) => setBase({ ...base, name: v })} /><Input label="Kode" value={base.code} onChange={(v) => setBase({ ...base, code: v })} /><Input label="Farge" type="color" value={base.color} onChange={(v) => setBase({ ...base, color: v })} /><Input label="Piloter" type="number" value={String(base.minPilots)} onChange={(v) => setBase({ ...base, minPilots: Number(v) })} /><Input label="TS" type="number" value={String(base.minTs)} onChange={(v) => setBase({ ...base, minTs: Number(v) })} /><button className="self-end rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">Lagre</button></form><CardGrid>{data.bases.map((b) => <InfoCard key={b.id} title={`${b.code} · ${b.name}`} text={`${b.minPilots} pilot / ${b.minTs} TS`} color={b.color} />)}</CardGrid></Panel>;
+  const [base, setBase] = useState<BaseForm>(emptyBaseForm);
+  const editing = Boolean(base.id);
+  const pilots = data.personnel.filter((person) => person.role === "pilot" && person.active).sort((a, b) => a.code.localeCompare(b.code));
+  const taskSpecialists = data.personnel.filter((person) => person.role === "ts" && person.active).sort((a, b) => a.code.localeCompare(b.code));
+
+  function labelFor(person: Personnel) {
+    const homeBase = data.bases.find((item) => item.id === person.homeBaseId);
+    return `${person.code} · ${person.name}${homeBase && homeBase.id !== base.id ? ` (${homeBase.code})` : ""}`;
+  }
+
+  function editBase(item: Base) {
+    setBase({ id: item.id, name: item.name, code: item.code, color: item.color, minPilots: item.minPilots, minTs: item.minTs, note: item.note || "", pilotIds: pilots.filter((person) => person.homeBaseId === item.id).map((person) => person.id), tsIds: taskSpecialists.filter((person) => person.homeBaseId === item.id).map((person) => person.id) });
+  }
+
+  async function saveBase(event: FormEvent) {
+    event.preventDefault();
+    await mutate("upsertBaseWithMembership", { base });
+    setBase(emptyBaseForm);
+  }
+
+  return (
+    <Panel title="Baser">
+      <form onSubmit={saveBase} className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">{editing ? `Rediger ${base.code}` : "Legg til base"}</h3>
+            <p className="text-sm text-slate-600">Trykk på en base under for å velge hvilke piloter og lastemenn/TS som hører til basen.</p>
+          </div>
+          {editing && <button type="button" onClick={() => setBase(emptyBaseForm)} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold">Avbryt</button>}
+        </div>
+        <div className="grid gap-3 md:grid-cols-6">
+          <Input label="Navn" value={base.name} onChange={(v) => setBase({ ...base, name: v })} />
+          <Input label="Kode" value={base.code} onChange={(v) => setBase({ ...base, code: v.toUpperCase().slice(0, 4) })} />
+          <Input label="Farge" type="color" value={base.color} onChange={(v) => setBase({ ...base, color: v })} />
+          <Input label="Min piloter" type="number" value={String(base.minPilots)} onChange={(v) => setBase({ ...base, minPilots: Number(v) })} />
+          <Input label="Min TS" type="number" value={String(base.minTs)} onChange={(v) => setBase({ ...base, minTs: Number(v) })} />
+          <button className="self-end rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">{editing ? "Lagre base" : "Opprett base"}</button>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <CheckboxList title="Piloter som hører til basen" items={pilots.map((person) => ({ id: person.id, label: labelFor(person) }))} selected={base.pilotIds} onChange={(pilotIds) => setBase({ ...base, pilotIds })} emptyText="Ingen aktive piloter." />
+          <CheckboxList title="Lastemenn/TS som hører til basen" items={taskSpecialists.map((person) => ({ id: person.id, label: labelFor(person) }))} selected={base.tsIds} onChange={(tsIds) => setBase({ ...base, tsIds })} emptyText="Ingen aktive TS." />
+        </div>
+        <Input label="Notat" value={base.note} onChange={(v) => setBase({ ...base, note: v })} />
+      </form>
+      <CardGrid>{data.bases.map((item) => <BaseCard key={item.id} base={item} data={data} selected={item.id === base.id} onClick={() => editBase(item)} />)}</CardGrid>
+    </Panel>
+  );
+}
+
+function BaseCard({ base, data, selected, onClick }: { base: Base; data: HeliqData; selected: boolean; onClick: () => void }) {
+  const pilots = data.personnel.filter((person) => person.role === "pilot" && person.homeBaseId === base.id);
+  const taskSpecialists = data.personnel.filter((person) => person.role === "ts" && person.homeBaseId === base.id);
+  const enoughPilots = pilots.length >= base.minPilots;
+  const enoughTs = taskSpecialists.length >= base.minTs;
+  return <button type="button" onClick={onClick} className={`rounded-xl border bg-slate-50 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50 ${selected ? "border-blue-600 ring-2 ring-blue-100" : "border-slate-200"}`} style={{ borderLeft: `5px solid ${base.color}` }}><h3 className="font-semibold">{base.code} · {base.name}</h3><p className="mt-1 text-sm text-slate-600">Krav: {base.minPilots} pilot / {base.minTs} TS</p><p className="mt-2 text-xs font-semibold text-slate-500">Tilknyttet: <span className={enoughPilots ? "text-emerald-700" : "text-amber-700"}>{pilots.length} piloter</span> · <span className={enoughTs ? "text-emerald-700" : "text-amber-700"}>{taskSpecialists.length} TS</span></p></button>;
 }
 
 function QualificationsPanel({ mutate }: { mutate: (action: string, payload: Record<string, unknown>) => Promise<void> }) {

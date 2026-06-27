@@ -107,6 +107,33 @@ export async function upsertBase(input: Partial<Base>, actor: string) {
   return publicData(data);
 }
 
+export async function upsertBaseWithMembership(input: Partial<Base> & { pilotIds?: string[]; tsIds?: string[] }, actor: string) {
+  const data = await getHeliqData();
+  const id = input.id || newId("base");
+  const item: Base = { id, name: input.name || "Ny base", code: (input.code || "BAS").toUpperCase().slice(0, 4), color: input.color || "#2563eb", minPilots: Number(input.minPilots ?? 1), minTs: Number(input.minTs ?? 1), requiredQualificationIds: input.requiredQualificationIds || [], note: input.note || "" };
+  const selected = new Set([...(input.pilotIds || []), ...(input.tsIds || [])]);
+  const changedPersonnel: Personnel[] = [];
+
+  data.bases = [item, ...data.bases.filter((base) => base.id !== id)];
+  data.personnel = data.personnel.map((person) => {
+    if (person.role !== "pilot" && person.role !== "ts") return person;
+    const nextHomeBaseId = selected.has(person.id) ? id : person.homeBaseId === id ? undefined : person.homeBaseId;
+    if (nextHomeBaseId === person.homeBaseId) return person;
+    const next = { ...person, homeBaseId: nextHomeBaseId };
+    changedPersonnel.push(next);
+    return next;
+  });
+
+  await audit(data, actor, "upsert", id, `Base ${item.code} lagret med ${selected.size} tilknyttede personer`);
+  if (getAdminDb()) {
+    await writeCollectionDoc("bases", item);
+    await Promise.all(changedPersonnel.map((person) => writeCollectionDoc("personnel", person)));
+  } else {
+    await writeLocal(data);
+  }
+  return publicData(data);
+}
+
 export async function upsertProject(input: Partial<Project>, actor: string) {
   const data = await getHeliqData();
   const id = input.id || newId("project");
