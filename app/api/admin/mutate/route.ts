@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAdminSession } from "@/lib/security";
-import { applyCoverageAssignments, seedDemo, toggleAssignment, upsertBase, upsertBaseWithMembership, upsertPersonnel, upsertProject, upsertQualification } from "@/lib/store";
+import { applyCoverageAssignments, pushSchedule, seedDemo, toggleAssignment, upsertBase, upsertBaseWithMembership, upsertPersonnel, upsertProject, upsertQualification } from "@/lib/store";
 
 export async function POST(request: Request) {
   const session = await getAdminSession();
@@ -9,6 +9,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const actor = session.sub;
     if (body.action === "seedDemo") return NextResponse.json({ data: await seedDemo(actor) });
+    if (body.action === "pushSchedule") return NextResponse.json({ data: await pushSchedule(actor) });
     if (body.action === "upsertPersonnel") return NextResponse.json({ data: await upsertPersonnel(body.personnel, actor) });
     if (body.action === "upsertBase") return NextResponse.json({ data: await upsertBase(body.base, actor) });
     if (body.action === "upsertBaseWithMembership") return NextResponse.json({ data: await upsertBaseWithMembership(body.base, actor) });

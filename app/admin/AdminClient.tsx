@@ -116,6 +116,11 @@ export default function AdminClient() {
     setError("");
   }
 
+  async function pushSchedule() {
+    if (!window.confirm("Publisere gjeldende draft-schedule til alle piloter og TS?")) return;
+    await mutate("pushSchedule", {});
+  }
+
   if (loading) return <Shell><p className="rounded-xl bg-white p-5 shadow-sm">Laster Heliq…</p></Shell>;
   if (!data) return (
     <Shell>
@@ -163,15 +168,12 @@ export default function AdminClient() {
           <HeliqLogo />
           <div className="flex flex-wrap gap-2">
             {(["schedule", "people", "projects", "bases", "quals", "audit"] as Tab[]).map((item) => <button key={item} onClick={() => setTab(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${tab === item ? "bg-slate-900 text-white" : "border border-slate-300 bg-white"}`}>{tabLabel(item)}</button>)}
+            <button onClick={pushSchedule} className="rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">Push schedule</button>
             <button onClick={logout} className="rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-800 hover:bg-rose-100">Logg ut</button>
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-[1600px] space-y-4 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div><p className="text-sm font-semibold text-slate-500">Lagring</p><p className="font-semibold">{data.storageMode === "firestore" ? "Firebase Firestore" : "Lokal demo-lagring"}</p></div>
-          <button onClick={() => mutate("seedDemo", {})} className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-800">Last demo-data på nytt</button>
-        </div>
+      <main className="mx-auto max-w-[1800px] space-y-3 p-2 lg:p-3">
         {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
         {tab === "schedule" && <ScheduleToolbar data={data} year={year} setYear={setYear} selectedPersonId={selectedPersonId} setSelectedPersonId={setSelectedPersonId} selectedStatus={selectedStatus} setSelectedStatus={setSelectedStatus} selectedProjectId={selectedProjectId} setSelectedProjectId={setSelectedProjectId} selectedBaseId={selectedBaseId} setSelectedBaseId={setSelectedBaseId} />}
         {tab === "schedule" && <CoverageSuggestions suggestions={coverageSuggestions} totalHidden={Math.max(0, coverageSuggestions.length - 30)} onApprove={approveCoverageSuggestion} onDismiss={dismissCoverageSuggestion} />}
@@ -339,7 +341,7 @@ function CoverageSuggestions({ suggestions, totalHidden, onApprove, onDismiss }:
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-semibold text-blue-950">Forslag til full basedekning</h2>
-          <p className="mt-1 text-sm text-blue-800">Systemet foreslår 14/14-turnusblokker med bytte mandag og avgang søndag. Admin må godkjenne eller avvise.</p>
+          <p className="mt-1 text-sm text-blue-800">Systemet foreslår 14/14-turnusblokker. Forslag og manuelle endringer blir først synlige i pilot/TS-appene når admin trykker Push schedule.</p>
         </div>
         <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-blue-900">{suggestions.length} forslag</span>
       </div>

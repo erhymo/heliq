@@ -8,7 +8,7 @@ import type { AuditLog, Base, HeliqData, Personnel, Project, Qualification, Sche
 const localPath = process.env.VERCEL
   ? path.join("/tmp", "heliq.local.json")
   : path.join(process.cwd(), "data", "heliq.local.json");
-const collections = ["personnel", "bases", "projects", "qualifications", "assignments", "auditLogs"] as const;
+const collections = ["personnel", "bases", "projects", "qualifications", "assignments", "publishedAssignments", "auditLogs"] as const;
 const DEFAULT_PROJECT_COLOR = "#2563eb";
 
 function codeFromLastName(name?: string) {
@@ -23,12 +23,27 @@ function mode() {
 }
 
 function emptyData(): HeliqData {
-  return { personnel: [], bases: [], projects: [], qualifications: [], vehicles: [], trailers: [], assignments: [], auditLogs: [], storageMode: mode() };
+  return { personnel: [], bases: [], projects: [], qualifications: [], vehicles: [], trailers: [], assignments: [], publishedAssignments: [], auditLogs: [], storageMode: mode() };
+}
+
+function normalizeData(data: Partial<HeliqData>, storageMode: "firestore" | "local"): HeliqData {
+  return {
+    personnel: data.personnel || [],
+    bases: data.bases || [],
+    projects: data.projects || [],
+    qualifications: data.qualifications || [],
+    vehicles: data.vehicles || [],
+    trailers: data.trailers || [],
+    assignments: data.assignments || [],
+    publishedAssignments: data.publishedAssignments || [],
+    auditLogs: data.auditLogs || [],
+    storageMode,
+  };
 }
 
 async function readLocal(): Promise<HeliqData> {
   try {
-    return { ...JSON.parse(await fs.readFile(localPath, "utf8")), storageMode: "local" };
+    return normalizeData(JSON.parse(await fs.readFile(localPath, "utf8")), "local");
   } catch {
     const data = createDemoData("local");
     try {
@@ -65,6 +80,13 @@ async function writeCollectionDoc<T extends { id: string }>(collection: string, 
   if (db) await db.collection(collection).doc(item.id).set(item, { merge: true });
 }
 
+async function clearCollection(collection: string) {
+  const db = getAdminDb();
+  if (!db) return;
+  const snap = await db.collection(collection).get();
+  await Promise.all(snap.docs.map((doc) => doc.ref.delete()));
+}
+
 export async function getHeliqData() {
   return getAdminDb() ? readFirestore() : readLocal();
 }
@@ -84,8 +106,23 @@ export async function seedDemo(actor = "admin") {
   await audit(data, actor, "seed", "demo", "Demo-data lastet inn på nytt");
   if (getAdminDb()) {
     const db = getAdminDb()!;
+    await Promise.all(collections.map((name) => clearCollection(name)));
     await Promise.all(collections.flatMap((name) => data[name].map((item) => db.collection(name).doc(item.id).set(item))));
     await db.collection("settings").doc("lists").set({ vehicles: data.vehicles, trailers: data.trailers }, { merge: true });
+  } else {
+    await writeLocal(data);
+  }
+  return publicData(data);
+}
+
+export async function pushSchedule(actor: string) {
+  const data = await getHeliqData();
+  data.publishedAssignments = data.assignments.map((assignment) => ({ ...assignment, updatedAt: new Date().toISOString() }));
+  await audit(data, actor, "pushSchedule", "schedule", `${data.publishedAssignments.length} schedulelinjer publisert`);
+  const db = getAdminDb();
+  if (db) {
+    await clearCollection("publishedAssignments");
+    await Promise.all(data.publishedAssignments.map((assignment) => writeCollectionDoc("publishedAssignments", assignment)));
   } else {
     await writeLocal(data);
   }

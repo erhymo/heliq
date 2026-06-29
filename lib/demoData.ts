@@ -53,9 +53,6 @@ export function createDemoData(storageMode: "firestore" | "local"): HeliqData {
     pilot("p_efg", "Eirik Fonn", "base_bgo", ["q_heslo3", "q_longline"], "1010"),
     pilot("p_fgh", "Frida Gran", "base_fde", ["q_heslo2", "q_naal"], "1011"),
     pilot("p_hij", "Henrik Iversen", "base_bgo", ["q_heslo4"], "1012"),
-    pilot("p_ijk", "Ida Jansen", "base_fde", ["q_heslo3"], "1013"),
-    pilot("p_klm", "Kasper Lien", "base_bgo", ["q_heslo2"], "1014"),
-    pilot("p_nop", "Nora Opheim", "base_fde", ["q_heslo4", "q_naal"], "1015"),
     tsPerson("t_jkl", "Jenny Lund", "base_fde", true, ["Pickup"], ["Stor henger"], "2001"),
     tsPerson("t_mno", "Mats Nord", "base_bgo", false, ["Varebil"], ["Liten henger"], "2002"),
     tsPerson("t_qrs", "Quentin Rød", "base_fde", true, ["Lastebil"], ["Stor henger"], "2003"),
@@ -71,9 +68,6 @@ export function createDemoData(storageMode: "firestore" | "local"): HeliqData {
     tsPerson("t_laa", "Lars Aamodt", "base_fde", false, ["Varebil"], ["Liten henger"], "2013"),
     tsPerson("t_lbb", "Linda Bøe", "base_bgo", true, ["Pickup"], ["Stor henger"], "2014"),
     tsPerson("t_lcc", "Leif Christiansen", "base_fde", false, ["Varebil"], ["Liten henger"], "2015"),
-    tsPerson("t_ldd", "Live Dalen", "base_bgo", true, ["Lastebil"], ["Stor henger"], "2016"),
-    tsPerson("t_lee", "Lena Engen", "base_fde", true, ["Pickup"], ["Liten henger"], "2017"),
-    tsPerson("t_lff", "Ludvik Foss", "base_bgo", false, ["Varebil"], ["Stor henger"], "2018"),
   ];
   const dates = Array.from({ length: 14 }, (_, i) => iso(year, 1, 8 + i));
   const assignments = dates.flatMap((date) => [assignment("p_abc", date, "proj_naal"), assignment("t_jkl", date, "proj_naal")]);
@@ -85,6 +79,7 @@ export function createDemoData(storageMode: "firestore" | "local"): HeliqData {
     vehicles: ["Pickup", "Varebil", "Lastebil"],
     trailers: ["Liten henger", "Stor henger"],
     assignments,
+    publishedAssignments: assignments,
     auditLogs: [{ id: newId("audit"), at: new Date().toISOString(), actor: "system", action: "seed", target: "demo", summary: "Demo-data opprettet" }],
     storageMode,
   };

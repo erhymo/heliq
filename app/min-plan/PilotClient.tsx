@@ -53,7 +53,7 @@ export default function PilotClient() {
 
 function Plan({ data, personId }: { data: HeliqData; personId: string }) {
   const person = data.personnel.find((candidate) => candidate.id === personId);
-  const assignments = useMemo(() => data.assignments.filter((assignment) => assignment.personId === personId).sort((a, b) => a.date.localeCompare(b.date)), [data.assignments, personId]);
+  const assignments = useMemo(() => (data.publishedAssignments || []).filter((assignment) => assignment.personId === personId).sort((a, b) => a.date.localeCompare(b.date)), [data.publishedAssignments, personId]);
   const projects = new Map(data.projects.map((project) => [project.id, project]));
   const bases = new Map(data.bases.map((base) => [base.id, base]));
   return (
@@ -76,7 +76,7 @@ function Plan({ data, personId }: { data: HeliqData; personId: string }) {
 function PlanCard({ assignment, data, projects, bases, me }: { assignment: ScheduleAssignment; data: HeliqData; projects: Map<string, { name: string; location: string; color: string }>; bases: Map<string, { name: string; code: string; color: string }>; me?: Personnel }) {
   const project = assignment.projectId ? projects.get(assignment.projectId) : undefined;
   const base = assignment.baseId ? bases.get(assignment.baseId) : undefined;
-  const colleagues = data.assignments.filter((other) => other.date === assignment.date && other.personId !== assignment.personId && (assignment.projectId ? other.projectId === assignment.projectId : other.baseId === assignment.baseId)).map((other) => data.personnel.find((person) => person.id === other.personId)).filter(Boolean) as Personnel[];
+  const colleagues = (data.publishedAssignments || []).filter((other) => other.date === assignment.date && other.personId !== assignment.personId && (assignment.projectId ? other.projectId === assignment.projectId : other.baseId === assignment.baseId)).map((other) => data.personnel.find((person) => person.id === other.personId)).filter(Boolean) as Personnel[];
   const color = project?.color || base?.color || "#2563eb";
   return (
     <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" style={{ borderLeft: `6px solid ${color}` }}>

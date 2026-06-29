@@ -89,6 +89,7 @@ export type HeliqData = {
   vehicles: string[];
   trailers: string[];
   assignments: ScheduleAssignment[];
+  publishedAssignments: ScheduleAssignment[];
   auditLogs: AuditLog[];
   storageMode: "firestore" | "local";
 };
