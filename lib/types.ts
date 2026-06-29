@@ -7,6 +7,7 @@ export type ScheduleStatus =
   | "sick"
   | "training"
   | "standby"
+  | "sold_day"
   | "project"
   | "travel";
 
@@ -101,6 +102,7 @@ export const statusLabels: Record<ScheduleStatus, string> = {
   sick: "Syk",
   training: "Kurs",
   standby: "Standby",
+  sold_day: "Salg av fri",
   project: "Prosjekt",
   travel: "Reise",
 };
@@ -112,8 +114,21 @@ export const statusShort: Record<ScheduleStatus, string> = {
   sick: "SYK",
   training: "KURS",
   standby: "STBY",
+  sold_day: "SALG",
   project: "PROS",
   travel: "REISE",
+};
+
+export const statusColor: Record<ScheduleStatus, string> = {
+  work: "#334155",
+  off: "#94a3b8",
+  vacation: "#059669",
+  sick: "#e11d48",
+  training: "#7c3aed",
+  standby: "#d97706",
+  sold_day: "#f97316",
+  project: "#2563eb",
+  travel: "#0284c7",
 };
 
 export const statusTone: Record<ScheduleStatus, string> = {
@@ -123,6 +138,7 @@ export const statusTone: Record<ScheduleStatus, string> = {
   sick: "border-rose-200 bg-rose-50 text-rose-800",
   training: "border-violet-200 bg-violet-50 text-violet-800",
   standby: "border-amber-200 bg-amber-50 text-amber-800",
+  sold_day: "border-orange-200 bg-orange-50 text-orange-900",
   project: "border-blue-200 bg-blue-50 text-blue-800",
   travel: "border-sky-200 bg-sky-50 text-sky-800",
 };

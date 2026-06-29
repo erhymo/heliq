@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import HeliqLogo from "@/components/HeliqLogo";
 import type { Base, HeliqData, Personnel, Project, QualificationKind, Role, ScheduleAssignment, ScheduleStatus } from "@/lib/types";
-import { statusLabels, statusShort } from "@/lib/types";
+import { statusColor, statusLabels, statusShort } from "@/lib/types";
 
 type Tab = "schedule" | "people" | "projects" | "bases" | "quals" | "audit";
 type CoverageProposalAssignment = { personId: string; date: string; baseId: string; note?: string };
@@ -25,9 +25,9 @@ type ScheduleCellSelection = { personId: string; date: string };
 type ScheduleApplyOptions = { personId?: string; baseId?: string; projectId?: string; note?: string; startDate?: string; endDate?: string };
 type CellCandidateSuggestion = { base: Base; role: "pilot" | "ts"; person: Personnel; startDate: string; endDate: string };
 
-const quickScheduleStatuses: ScheduleStatus[] = ["work", "vacation", "sick", "training", "standby", "travel", "off"];
+const quickScheduleStatuses: ScheduleStatus[] = ["work", "sold_day", "vacation", "sick", "training", "standby", "travel", "off"];
 const dutyStatuses = new Set<ScheduleStatus>(["work", "project", "training", "standby", "travel"]);
-const hardConflictStatuses = new Set<ScheduleStatus>(["work", "project", "vacation", "sick", "training", "standby", "travel", "off"]);
+const hardConflictStatuses = new Set<ScheduleStatus>(["work", "project", "vacation", "sick", "training", "standby", "sold_day", "travel", "off"]);
 const todayYear = new Date().getFullYear();
 const PROJECT_COLOR = "#2563eb";
 
@@ -262,8 +262,8 @@ function Row({ day, people, assignmentsByKey, projectById, baseById, selectedPer
     const assignment = assignmentsByKey.get(`${person.id}_${day}`);
     const project = assignment?.projectId ? projectById.get(assignment.projectId) : undefined;
     const base = assignment?.baseId ? baseById.get(assignment.baseId) : undefined;
-    const color = project ? PROJECT_COLOR : base?.color;
-    const cellCode = project ? shortCodeFromText(project.name) : base?.code || (assignment ? statusShort[assignment.status].slice(0, 3) : "");
+    const color = project ? PROJECT_COLOR : assignment?.status === "work" ? base?.color : assignment ? statusColor[assignment.status] : undefined;
+    const cellCode = project ? shortCodeFromText(project.name) : assignment?.status === "work" ? base?.code || statusShort.work.slice(0, 3) : assignment ? statusShort[assignment.status].slice(0, 4) : "";
     const selected = selectedCell?.personId === person.id && selectedCell.date === day;
     return <button key={`${person.id}_${day}`} onClick={() => onCell(person, day)} className={`h-8 border-b border-r border-slate-200 p-0.5 text-center text-[10px] font-black transition hover:ring-2 hover:ring-blue-400 ${selectedPersonId && selectedPersonId !== person.id ? "opacity-40" : ""} ${selected ? "ring-2 ring-blue-600" : ""}`} style={{ background: color ? `${color}24` : weekend ? "#f8fafc" : "#fff", color: color || "#334155" }}>{cellCode}</button>;
   })}</>;

@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import HeliqLogo from "@/components/HeliqLogo";
 import type { HeliqData, Personnel, ScheduleAssignment } from "@/lib/types";
-import { statusLabels } from "@/lib/types";
+import { statusColor, statusLabels } from "@/lib/types";
 
 export default function PilotClient() {
   const [pin, setPin] = useState("");
@@ -77,7 +77,7 @@ function PlanCard({ assignment, data, projects, bases, me }: { assignment: Sched
   const project = assignment.projectId ? projects.get(assignment.projectId) : undefined;
   const base = assignment.baseId ? bases.get(assignment.baseId) : undefined;
   const colleagues = (data.publishedAssignments || []).filter((other) => other.date === assignment.date && other.personId !== assignment.personId && (assignment.projectId ? other.projectId === assignment.projectId : other.baseId === assignment.baseId)).map((other) => data.personnel.find((person) => person.id === other.personId)).filter(Boolean) as Personnel[];
-  const color = project?.color || base?.color || "#2563eb";
+  const color = project?.color || (assignment.status === "work" ? base?.color : undefined) || statusColor[assignment.status];
   return (
     <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" style={{ borderLeft: `6px solid ${color}` }}>
       <div className="flex flex-wrap items-start justify-between gap-3">

@@ -61,7 +61,7 @@ if (activePeople.length === 0) throw new Error("no_active_people");
 
 const yearDays = new Set(daysInYear(year));
 const annualDutyLimit = Math.ceil(yearDays.size / 2);
-const hardConflictStatuses = new Set(["work", "project", "vacation", "sick", "training", "standby", "travel", "off"]);
+const hardConflictStatuses = new Set(["work", "project", "vacation", "sick", "training", "standby", "sold_day", "travel", "off"]);
 const dutyStatuses = new Set(["work", "project", "training", "standby", "travel"]);
 const oldGeneratedIds = new Set(existingAssignments
   .filter((a) => String(a.date || "").startsWith(`${year}-`) && a.note?.includes("14/14"))
