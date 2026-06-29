@@ -77,7 +77,13 @@ async function readFirestore(): Promise<HeliqData> {
 
 async function writeCollectionDoc<T extends { id: string }>(collection: string, item: T) {
   const db = getAdminDb();
-  if (db) await db.collection(collection).doc(item.id).set(item, { merge: true });
+  if (db) await db.collection(collection).doc(item.id).set(stripUndefined(item), { merge: true });
+}
+
+function stripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => stripUndefined(item)) as T;
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).map(([key, item]) => [key, stripUndefined(item)])) as T;
 }
 
 async function clearCollection(collection: string) {
