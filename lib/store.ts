@@ -199,13 +199,21 @@ export async function upsertQualification(input: Partial<Qualification>, actor: 
   return publicData(data);
 }
 
+function scheduleAssignment(input: { personId: string; date: string; status: ScheduleStatus; baseId?: string; projectId?: string; note?: string }, updatedAt = new Date().toISOString()): ScheduleAssignment {
+  const item: ScheduleAssignment = { id: `${input.personId}_${input.date}`, personId: input.personId, date: input.date, status: input.status, updatedAt };
+  if (input.baseId) item.baseId = input.baseId;
+  if (input.projectId) item.projectId = input.projectId;
+  if (input.note) item.note = input.note;
+  return item;
+}
+
 export async function toggleAssignment(input: { personId: string; date: string; status: ScheduleStatus; baseId?: string; projectId?: string; note?: string }, actor: string) {
   const data = await getHeliqData();
   const id = `${input.personId}_${input.date}`;
   const existing = data.assignments.find((a) => a.id === id);
   const same = existing && existing.status === input.status && existing.baseId === input.baseId && existing.projectId === input.projectId;
   if (same) data.assignments = data.assignments.filter((a) => a.id !== id);
-  else data.assignments = [{ id, ...input, updatedAt: new Date().toISOString() }, ...data.assignments.filter((a) => a.id !== id)];
+  else data.assignments = [scheduleAssignment(input), ...data.assignments.filter((a) => a.id !== id)];
   await audit(data, actor, same ? "removeAssignment" : "setAssignment", id, `${same ? "Fjernet" : "Satt"} ${input.personId} ${input.date}`);
   const db = getAdminDb();
   if (db) same ? await db.collection("assignments").doc(id).delete() : await writeCollectionDoc("assignments", data.assignments[0]);
@@ -216,16 +224,7 @@ export async function toggleAssignment(input: { personId: string; date: string; 
 export async function setScheduleAssignments(input: { assignments: Array<{ personId: string; date: string; status: ScheduleStatus; baseId?: string; projectId?: string; note?: string }> }, actor: string) {
   const data = await getHeliqData();
   const now = new Date().toISOString();
-  const nextAssignments = input.assignments.map((assignment) => ({
-    id: `${assignment.personId}_${assignment.date}`,
-    personId: assignment.personId,
-    date: assignment.date,
-    status: assignment.status,
-    baseId: assignment.baseId,
-    projectId: assignment.projectId,
-    note: assignment.note || "",
-    updatedAt: now,
-  }));
+  const nextAssignments = input.assignments.map((assignment) => scheduleAssignment(assignment, now));
   const nextIds = new Set(nextAssignments.map((assignment) => assignment.id));
   data.assignments = [...nextAssignments, ...data.assignments.filter((assignment) => !nextIds.has(assignment.id))];
   await audit(data, actor, "setScheduleAssignments", "schedule", `${nextAssignments.length} schedulelinjer satt`);

@@ -175,13 +175,6 @@ export default function AdminClient() {
     setCellSelection(null);
   }
 
-  async function clearCellAssignments() {
-    if (!cellSelection || !data) return;
-    const dates = datesBetween(cellSelection.date, cellEndDate);
-    await mutate("removeScheduleAssignments", { assignments: dates.map((date) => ({ personId: cellSelection.personId, date })) });
-    setCellSelection(null);
-  }
-
   async function approveCoverageSuggestion(suggestion: CoverageProposal) {
     await mutate("applyCoverageAssignments", { assignments: suggestion.assignments });
     setDismissedSuggestionIds((ids) => [...ids, suggestion.id]);
@@ -209,7 +202,7 @@ export default function AdminClient() {
         {tab === "schedule" && <CoverageSuggestions suggestions={coverageSuggestions} totalHidden={Math.max(0, coverageSuggestions.length - 12)} onApprove={approveCoverageSuggestion} onDismiss={dismissCoverageSuggestion} />}
         {tab === "schedule" && warnings.length > 0 && <Warnings warnings={warnings} />}
         {tab === "schedule" && <ScheduleGrid people={people} days={days} data={data} assignmentsByKey={assignmentsByKey} selectedPersonId={selectedPersonId} selectedCell={cellSelection} onCell={clickCell} />}
-        {tab === "schedule" && cellSelection && selectedCellPerson && <ScheduleCellPopover key={`${cellSelection.personId}_${cellSelection.date}`} data={data} person={selectedCellPerson} date={cellSelection.date} endDate={cellEndDate} setEndDate={setCellEndDate} assignment={selectedCellAssignment} suggestions={selectedCellSuggestions} onApply={applyCellStatus} onClear={clearCellAssignments} onClose={() => setCellSelection(null)} />}
+        {tab === "schedule" && cellSelection && selectedCellPerson && <ScheduleCellPopover key={`${cellSelection.personId}_${cellSelection.date}`} data={data} person={selectedCellPerson} date={cellSelection.date} endDate={cellEndDate} setEndDate={setCellEndDate} assignment={selectedCellAssignment} suggestions={selectedCellSuggestions} onApply={applyCellStatus} onClose={() => setCellSelection(null)} />}
         {tab === "people" && <PeoplePanel data={data} mutate={mutate} />}
         {tab === "projects" && <ProjectsPanel data={data} mutate={mutate} />}
         {tab === "bases" && <BasesPanel data={data} mutate={mutate} />}
@@ -269,13 +262,37 @@ function Row({ day, people, assignmentsByKey, projectById, baseById, selectedPer
   })}</>;
 }
 
-function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignment, suggestions, onApply, onClear, onClose }: { data: HeliqData; person: Personnel; date: string; endDate: string; setEndDate: (value: string) => void; assignment?: ScheduleAssignment; suggestions: CellCandidateSuggestion[]; onApply: (status: ScheduleStatus, options?: ScheduleApplyOptions) => void; onClear: () => void; onClose: () => void }) {
+function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignment, suggestions, onApply, onClose }: { data: HeliqData; person: Personnel; date: string; endDate: string; setEndDate: (value: string) => void; assignment?: ScheduleAssignment; suggestions: CellCandidateSuggestion[]; onApply: (status: ScheduleStatus, options?: ScheduleApplyOptions) => void; onClose: () => void }) {
   const [baseId, setBaseId] = useState(assignment?.baseId || person.homeBaseId || "");
   const [projectId, setProjectId] = useState(assignment?.projectId || "");
   const [note, setNote] = useState(assignment?.note || "");
+  const [selectedStatus, setSelectedStatus] = useState<ScheduleStatus>(assignment?.projectId ? "project" : assignment?.status || "work");
+  const [selectedSuggestion, setSelectedSuggestion] = useState<CellCandidateSuggestion | null>(null);
   const base = data.bases.find((item) => item.id === baseId);
   const project = data.projects.find((item) => item.id === projectId);
   const baseLabel = base?.code || "ingen base";
+  const canSave = selectedStatus !== "project" || Boolean(projectId);
+
+  function chooseStatus(status: ScheduleStatus) {
+    setSelectedStatus(status);
+    setSelectedSuggestion(null);
+  }
+
+  function chooseSuggestion(suggestion: CellCandidateSuggestion) {
+    setSelectedSuggestion(suggestion);
+    setSelectedStatus("work");
+    setBaseId(suggestion.base.id);
+    setEndDate(suggestion.endDate);
+  }
+
+  function save() {
+    if (selectedSuggestion) {
+      onApply("work", { personId: selectedSuggestion.person.id, baseId: selectedSuggestion.base.id, startDate: selectedSuggestion.startDate, endDate: selectedSuggestion.endDate, note: note || `Systemforslag 14/14 ${selectedSuggestion.base.code}` });
+      return;
+    }
+    if (selectedStatus === "project") onApply("project", { projectId, note });
+    else onApply(selectedStatus, { baseId: selectedStatus === "work" ? baseId : undefined, note });
+  }
   return (
     <div className="fixed right-4 top-24 z-50 w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
       <div className="flex items-start justify-between gap-3">
@@ -287,19 +304,19 @@ function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignme
         <button onClick={onClose} className="rounded-full border border-slate-200 px-2 py-1 text-xs font-bold text-slate-500 hover:bg-slate-50">Lukk</button>
       </div>
       <label className="mt-4 block text-sm font-semibold text-slate-600">Til dato<input type="date" value={endDate || date} min={date} onChange={(event) => setEndDate(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-slate-900" /></label>
-      {suggestions.length > 0 && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-950"><p className="font-bold">Systemforslag for manglende dekning</p><div className="mt-2 grid gap-1">{suggestions.slice(0, 3).map((suggestion) => <button key={`${suggestion.base.id}_${suggestion.role}_${suggestion.person.id}`} onClick={() => onApply("work", { personId: suggestion.person.id, baseId: suggestion.base.id, startDate: suggestion.startDate, endDate: suggestion.endDate, note: `Systemforslag 14/14 ${suggestion.base.code}` })} className="rounded-lg bg-white px-2 py-1.5 text-left font-semibold text-emerald-900 hover:bg-emerald-100">{personCode(suggestion.person)} · {suggestion.person.name} til {suggestion.base.code} ({suggestion.role === "ts" ? "TS" : "pilot"}) · {prettyDate(suggestion.startDate)}–{prettyDate(suggestion.endDate)}</button>)}</div></div>}
+      {suggestions.length > 0 && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-950"><p className="font-bold">Systemforslag for manglende dekning</p><div className="mt-2 grid gap-1">{suggestions.slice(0, 3).map((suggestion) => { const selected = selectedSuggestion?.person.id === suggestion.person.id && selectedSuggestion.base.id === suggestion.base.id; return <button key={`${suggestion.base.id}_${suggestion.role}_${suggestion.person.id}`} onClick={() => chooseSuggestion(suggestion)} className={`rounded-lg px-2 py-1.5 text-left font-semibold hover:bg-emerald-100 ${selected ? "bg-emerald-200 ring-2 ring-emerald-500" : "bg-white"}`}>{personCode(suggestion.person)} · {suggestion.person.name} til {suggestion.base.code} ({suggestion.role === "ts" ? "TS" : "pilot"}) · {prettyDate(suggestion.startDate)}–{prettyDate(suggestion.endDate)}</button>; })}</div></div>}
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <label className="text-xs font-semibold text-slate-600">Base<select value={baseId} onChange={(event) => setBaseId(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"><option value="">Ingen base</option>{data.bases.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
-        <label className="text-xs font-semibold text-slate-600">Prosjekt<select value={projectId} onChange={(event) => setProjectId(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"><option value="">Ingen prosjekt</option>{data.projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label className="text-xs font-semibold text-slate-600">Prosjekt<select value={projectId} onChange={(event) => { setProjectId(event.target.value); if (event.target.value) chooseStatus("project"); }} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"><option value="">Ingen prosjekt</option>{data.projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       </div>
-      {project && <button onClick={() => onApply("project", { projectId, note })} className="mt-3 w-full rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700">Prosjekt · {project.name}</button>}
+      {project && <button onClick={() => chooseStatus("project")} className={`mt-3 w-full rounded-xl px-3 py-2 text-sm font-semibold ${selectedStatus === "project" ? "bg-blue-700 text-white ring-2 ring-blue-300" : "bg-blue-600 text-white hover:bg-blue-700"}`}>Prosjekt · {project.name}</button>}
       <div className="mt-3 grid grid-cols-2 gap-2">
-        {quickScheduleStatuses.map((status) => <button key={status} onClick={() => onApply(status, { baseId: status === "work" ? baseId : undefined, note })} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800 hover:border-blue-300 hover:bg-blue-50">{status === "work" ? `Jobb · ${baseLabel}` : statusLabels[status]}</button>)}
+        {quickScheduleStatuses.map((status) => <button key={status} onClick={() => chooseStatus(status)} className={`rounded-xl border px-3 py-2 text-sm font-semibold hover:border-blue-300 hover:bg-blue-50 ${selectedStatus === status && !selectedSuggestion ? "border-blue-500 bg-blue-50 text-blue-900 ring-2 ring-blue-100" : "border-slate-200 bg-slate-50 text-slate-800"}`}>{status === "work" ? `Jobb · ${baseLabel}` : statusLabels[status]}</button>)}
       </div>
       <input value={note} onChange={(event) => setNote(event.target.value)} className="mt-3 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900" placeholder="Notat (valgfritt)" />
       <div className="mt-3 flex gap-2 border-t border-slate-100 pt-3">
-        <button onClick={onClear} className="flex-1 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-800 hover:bg-rose-100">Fjern</button>
         <button onClick={onClose} className="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Avbryt</button>
+        <button onClick={save} disabled={!canSave} className="flex-1 rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300">OK</button>
       </div>
     </div>
   );
