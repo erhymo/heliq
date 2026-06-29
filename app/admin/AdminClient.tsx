@@ -22,9 +22,12 @@ type CoverageProposal = {
   assignments: CoverageProposalAssignment[];
 };
 type ScheduleCellSelection = { personId: string; date: string };
-type ScheduleApplyOptions = { baseId?: string; projectId?: string; note?: string };
+type ScheduleApplyOptions = { personId?: string; baseId?: string; projectId?: string; note?: string; startDate?: string; endDate?: string };
+type CellCandidateSuggestion = { base: Base; role: "pilot" | "ts"; person: Personnel; startDate: string; endDate: string };
 
 const quickScheduleStatuses: ScheduleStatus[] = ["work", "vacation", "sick", "training", "standby", "travel", "off"];
+const dutyStatuses = new Set<ScheduleStatus>(["work", "project", "training", "standby", "travel"]);
+const hardConflictStatuses = new Set<ScheduleStatus>(["work", "project", "vacation", "sick", "training", "standby", "travel", "off"]);
 const todayYear = new Date().getFullYear();
 const PROJECT_COLOR = "#2563eb";
 
@@ -150,6 +153,7 @@ export default function AdminClient() {
   const selectedPersonId = "";
   const selectedCellPerson = cellSelection ? data.personnel.find((person) => person.id === cellSelection.personId) : undefined;
   const selectedCellAssignment = cellSelection ? assignmentsByKey.get(`${cellSelection.personId}_${cellSelection.date}`) : undefined;
+  const selectedCellSuggestions = cellSelection && !selectedCellAssignment ? buildCellCandidateSuggestions(data, cellSelection.date) : [];
 
   function clickCell(person: Personnel, date: string) {
     if (selectedPersonId && selectedPersonId !== person.id) return;
@@ -160,13 +164,14 @@ export default function AdminClient() {
   async function applyCellStatus(status: ScheduleStatus, options: ScheduleApplyOptions = {}) {
     if (!cellSelection || !data) return;
     const person = data.personnel.find((candidate) => candidate.id === cellSelection.personId);
-    if (!person) return;
+    const assignee = options.personId ? data.personnel.find((candidate) => candidate.id === options.personId) : person;
+    if (!person || !assignee) return;
     const projectId = status === "project" ? options.projectId : undefined;
     const nextStatus = projectId ? "project" : status === "project" ? "work" : status;
     const shouldUseBase = !projectId && (Boolean(options.baseId) || nextStatus === "work");
     const baseId = projectId ? undefined : options.baseId || (shouldUseBase ? person.homeBaseId : undefined);
-    const dates = datesBetween(cellSelection.date, cellEndDate);
-    await mutate("setScheduleAssignments", { assignments: dates.map((date) => ({ personId: person.id, date, status: nextStatus, projectId, baseId, note: options.note })) });
+    const dates = datesBetween(options.startDate || cellSelection.date, options.endDate || cellEndDate);
+    await mutate("setScheduleAssignments", { assignments: dates.map((date) => ({ personId: assignee.id, date, status: nextStatus, projectId, baseId, note: options.note })) });
     setCellSelection(null);
   }
 
@@ -204,7 +209,7 @@ export default function AdminClient() {
         {tab === "schedule" && <CoverageSuggestions suggestions={coverageSuggestions} totalHidden={Math.max(0, coverageSuggestions.length - 12)} onApprove={approveCoverageSuggestion} onDismiss={dismissCoverageSuggestion} />}
         {tab === "schedule" && warnings.length > 0 && <Warnings warnings={warnings} />}
         {tab === "schedule" && <ScheduleGrid people={people} days={days} data={data} assignmentsByKey={assignmentsByKey} selectedPersonId={selectedPersonId} selectedCell={cellSelection} onCell={clickCell} />}
-        {tab === "schedule" && cellSelection && selectedCellPerson && <ScheduleCellPopover key={`${cellSelection.personId}_${cellSelection.date}`} data={data} person={selectedCellPerson} date={cellSelection.date} endDate={cellEndDate} setEndDate={setCellEndDate} assignment={selectedCellAssignment} onApply={applyCellStatus} onClear={clearCellAssignments} onClose={() => setCellSelection(null)} />}
+        {tab === "schedule" && cellSelection && selectedCellPerson && <ScheduleCellPopover key={`${cellSelection.personId}_${cellSelection.date}`} data={data} person={selectedCellPerson} date={cellSelection.date} endDate={cellEndDate} setEndDate={setCellEndDate} assignment={selectedCellAssignment} suggestions={selectedCellSuggestions} onApply={applyCellStatus} onClear={clearCellAssignments} onClose={() => setCellSelection(null)} />}
         {tab === "people" && <PeoplePanel data={data} mutate={mutate} />}
         {tab === "projects" && <ProjectsPanel data={data} mutate={mutate} />}
         {tab === "bases" && <BasesPanel data={data} mutate={mutate} />}
@@ -264,7 +269,7 @@ function Row({ day, people, assignmentsByKey, projectById, baseById, selectedPer
   })}</>;
 }
 
-function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignment, onApply, onClear, onClose }: { data: HeliqData; person: Personnel; date: string; endDate: string; setEndDate: (value: string) => void; assignment?: ScheduleAssignment; onApply: (status: ScheduleStatus, options?: ScheduleApplyOptions) => void; onClear: () => void; onClose: () => void }) {
+function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignment, suggestions, onApply, onClear, onClose }: { data: HeliqData; person: Personnel; date: string; endDate: string; setEndDate: (value: string) => void; assignment?: ScheduleAssignment; suggestions: CellCandidateSuggestion[]; onApply: (status: ScheduleStatus, options?: ScheduleApplyOptions) => void; onClear: () => void; onClose: () => void }) {
   const [baseId, setBaseId] = useState(assignment?.baseId || person.homeBaseId || "");
   const [projectId, setProjectId] = useState(assignment?.projectId || "");
   const [note, setNote] = useState(assignment?.note || "");
@@ -282,6 +287,7 @@ function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignme
         <button onClick={onClose} className="rounded-full border border-slate-200 px-2 py-1 text-xs font-bold text-slate-500 hover:bg-slate-50">Lukk</button>
       </div>
       <label className="mt-4 block text-sm font-semibold text-slate-600">Til dato<input type="date" value={endDate || date} min={date} onChange={(event) => setEndDate(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-slate-900" /></label>
+      {suggestions.length > 0 && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-950"><p className="font-bold">Systemforslag for manglende dekning</p><div className="mt-2 grid gap-1">{suggestions.slice(0, 3).map((suggestion) => <button key={`${suggestion.base.id}_${suggestion.role}_${suggestion.person.id}`} onClick={() => onApply("work", { personId: suggestion.person.id, baseId: suggestion.base.id, startDate: suggestion.startDate, endDate: suggestion.endDate, note: `Systemforslag 14/14 ${suggestion.base.code}` })} className="rounded-lg bg-white px-2 py-1.5 text-left font-semibold text-emerald-900 hover:bg-emerald-100">{personCode(suggestion.person)} · {suggestion.person.name} til {suggestion.base.code} ({suggestion.role === "ts" ? "TS" : "pilot"}) · {prettyDate(suggestion.startDate)}–{prettyDate(suggestion.endDate)}</button>)}</div></div>}
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <label className="text-xs font-semibold text-slate-600">Base<select value={baseId} onChange={(event) => setBaseId(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"><option value="">Ingen base</option>{data.bases.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
         <label className="text-xs font-semibold text-slate-600">Prosjekt<select value={projectId} onChange={(event) => setProjectId(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"><option value="">Ingen prosjekt</option>{data.projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
@@ -299,12 +305,69 @@ function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignme
   );
 }
 
+function buildCellCandidateSuggestions(data: HeliqData, date: string): CellCandidateSuggestion[] {
+  const year = date.slice(0, 4);
+  const annualDutyLimit = Math.ceil(daysInYear(Number(year)).length / 2);
+  const activePeople = data.personnel.filter((person) => person.active && (person.role === "pilot" || person.role === "ts"));
+  const assignmentsByKey = new Map(data.assignments.map((assignment) => [`${assignment.personId}_${assignment.date}`, assignment]));
+  const blockStart = mondayOnOrBefore(date);
+  const blockDays = Array.from({ length: 14 }, (_, index) => addDays(blockStart, index)).filter((day) => day.startsWith(year));
+  const blockFirst = blockDays[0] || date;
+  const blockEnd = blockDays.at(-1) || date;
+
+  function qualifiedForBase(person: Personnel, base: Base) {
+    return base.requiredQualificationIds.every((id) => person.qualificationIds.includes(id));
+  }
+
+  function roleCount(base: Base, role: "pilot" | "ts") {
+    return data.assignments
+      .filter((assignment) => assignment.date === date && assignment.baseId === base.id)
+      .map((assignment) => data.personnel.find((person) => person.id === assignment.personId))
+      .filter((person): person is Personnel => person !== undefined && person.role === role).length;
+  }
+
+  function dutyCount(personId: string) {
+    return data.assignments.filter((assignment) => assignment.personId === personId && assignment.date.startsWith(year) && dutyStatuses.has(assignment.status)).length;
+  }
+
+  function hasDutyBetween(personId: string, startDate: string, endDate: string) {
+    for (let current = startDate; current <= endDate; current = addDays(current, 1)) {
+      const assignment = assignmentsByKey.get(`${personId}_${current}`);
+      if (assignment && dutyStatuses.has(assignment.status)) return true;
+    }
+    return false;
+  }
+
+  function canWorkBlock(person: Personnel) {
+    if (blockDays.some((day) => {
+      const assignment = assignmentsByKey.get(`${person.id}_${day}`);
+      return assignment ? hardConflictStatuses.has(assignment.status) : false;
+    })) return false;
+    if (dutyCount(person.id) + blockDays.length > annualDutyLimit) return false;
+    return !hasDutyBetween(person.id, addDays(blockStart, -14), addDays(blockStart, -1)) && !hasDutyBetween(person.id, addDays(blockEnd, 1), addDays(blockEnd, 14));
+  }
+
+  const suggestions: CellCandidateSuggestion[] = [];
+  for (const base of data.bases) {
+    for (const role of ["pilot", "ts"] as const) {
+      const missing = Math.max(0, Number(role === "pilot" ? base.minPilots : base.minTs) - roleCount(base, role));
+      if (missing === 0) continue;
+      const candidates = activePeople
+        .filter((person) => person.role === role && qualifiedForBase(person, base) && canWorkBlock(person))
+        .sort((a, b) => Number(b.homeBaseId === base.id) - Number(a.homeBaseId === base.id) || dutyCount(a.id) - dutyCount(b.id) || personCode(a).localeCompare(personCode(b)));
+      if (candidates[0]) suggestions.push({ base, role, person: candidates[0], startDate: blockFirst, endDate: blockEnd });
+    }
+  }
+  return suggestions;
+}
+
 function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Set<string>): CoverageProposal[] {
   const today = new Date().toISOString().slice(0, 10);
   const activePeople = data.personnel.filter((person) => person.active && (person.role === "pilot" || person.role === "ts"));
   const assignmentsByPersonDate = new Map(data.assignments.map((assignment) => [`${assignment.personId}_${assignment.date}`, assignment]));
   const yearDays = new Set(days);
   const year = days[0]?.slice(0, 4) || String(todayYear);
+  const annualDutyLimit = Math.ceil(yearDays.size / 2);
   const firstBlockStart = mondayOnOrBefore(`${year}-01-01`);
   const lastDay = days.at(-1) || `${year}-12-31`;
   const futureStart = today > `${year}-01-01` ? today : `${year}-01-01`;
@@ -314,7 +377,31 @@ function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Se
   }
 
   function personHasConflict(personId: string, blockDays: string[]) {
-    return blockDays.some((date) => assignmentsByPersonDate.has(`${personId}_${date}`));
+    return blockDays.some((date) => {
+      const assignment = assignmentsByPersonDate.get(`${personId}_${date}`);
+      return assignment ? hardConflictStatuses.has(assignment.status) : false;
+    });
+  }
+
+  function personDutyCount(personId: string) {
+    return data.assignments.filter((assignment) => assignment.personId === personId && assignment.date.startsWith(year) && dutyStatuses.has(assignment.status)).length;
+  }
+
+  function personHasDutyBetween(personId: string, startDate: string, endDate: string) {
+    for (let date = startDate; date <= endDate; date = addDays(date, 1)) {
+      const assignment = assignmentsByPersonDate.get(`${personId}_${date}`);
+      if (assignment && dutyStatuses.has(assignment.status)) return true;
+    }
+    return false;
+  }
+
+  function personCanWorkBlock(person: Personnel, blockDays: string[]) {
+    const first = blockDays[0];
+    const last = blockDays.at(-1);
+    if (!first || !last) return false;
+    if (personHasConflict(person.id, blockDays)) return false;
+    if (personDutyCount(person.id) + blockDays.length > annualDutyLimit) return false;
+    return !personHasDutyBetween(person.id, addDays(first, -14), addDays(first, -1)) && !personHasDutyBetween(person.id, addDays(last, 1), addDays(last, 14));
   }
 
   function roleCount(base: Base, date: string, role: "pilot" | "ts") {
@@ -327,14 +414,17 @@ function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Se
   function candidatePool(base: Base, role: "pilot" | "ts", blockDays: string[], crewIndex: number, required: number) {
     const homeBase = activePeople.filter((person) => person.role === role && person.homeBaseId === base.id && qualifiedForBase(person, base));
     const borrowed = activePeople.filter((person) => person.role === role && person.homeBaseId !== base.id && qualifiedForBase(person, base));
-    const sorted = [...homeBase, ...borrowed].filter((person) => !personHasConflict(person.id, blockDays));
+    const sorted = [...homeBase, ...borrowed].filter((person) => personCanWorkBlock(person, blockDays));
     const homeBaseCount = homeBase.length;
     const neededForRotation = Math.max(required * 2, required);
     const rotated = sorted.slice().sort((a, b) => personCode(a).localeCompare(personCode(b)));
-    const start = required === 0 ? 0 : (crewIndex * required) % Math.max(rotated.length, 1);
-    const ordered = [...rotated.slice(start), ...rotated.slice(0, start)];
+    const slotCount = Math.max(rotated.length, neededForRotation, 1);
+    const selected = Array.from({ length: required }, (_, index) => {
+      const slot = required === 0 ? 0 : (crewIndex * required + index) % slotCount;
+      return slot < rotated.length ? rotated[slot] : undefined;
+    }).filter((person): person is Personnel => person !== undefined);
     return {
-      selected: ordered.slice(0, required),
+      selected,
       enoughHomeBaseFor1414: homeBaseCount >= neededForRotation,
       enoughTotalFor1414: sorted.length >= neededForRotation,
     };

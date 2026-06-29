@@ -60,8 +60,24 @@ if (bases.length === 0) throw new Error("no_bases");
 if (activePeople.length === 0) throw new Error("no_active_people");
 
 const yearDays = new Set(daysInYear(year));
-const keepStatuses = new Set(["project", "vacation", "sick", "training", "standby", "travel"]);
-const existingByKey = new Map(existingAssignments.map((a) => [a.id || `${a.personId}_${a.date}`, a]));
+const annualDutyLimit = Math.ceil(yearDays.size / 2);
+const hardConflictStatuses = new Set(["work", "project", "vacation", "sick", "training", "standby", "travel", "off"]);
+const dutyStatuses = new Set(["work", "project", "training", "standby", "travel"]);
+const oldGeneratedIds = new Set(existingAssignments
+  .filter((a) => String(a.date || "").startsWith(`${year}-`) && a.note?.includes("14/14"))
+  .map((a) => a.id || `${a.personId}_${a.date}`));
+const ruleAssignments = existingAssignments.filter((a) => !oldGeneratedIds.has(a.id || `${a.personId}_${a.date}`));
+const existingByKey = new Map(ruleAssignments.map((a) => [a.id || `${a.personId}_${a.date}`, a]));
+const dutyDatesByPerson = new Map();
+const annualDutyCount = new Map();
+for (const assignment of ruleAssignments) {
+  if (!dutyStatuses.has(assignment.status)) continue;
+  const date = String(assignment.date || "");
+  const dates = dutyDatesByPerson.get(assignment.personId) || new Set();
+  dates.add(date);
+  dutyDatesByPerson.set(assignment.personId, dates);
+  if (date.startsWith(`${year}-`)) annualDutyCount.set(assignment.personId, (annualDutyCount.get(assignment.personId) || 0) + 1);
+}
 const generated = [];
 const warnings = [];
 
@@ -81,18 +97,38 @@ function qualifiedForBase(person, base) {
 
 function hasHardConflict(personId, date) {
   const existing = existingByKey.get(`${personId}_${date}`);
-  return existing && keepStatuses.has(existing.status);
+  return existing && hardConflictStatuses.has(existing.status);
 }
 
-function candidatePool(base, role, crewIndex, required, usedInBlock) {
+function hasDutyBetween(personId, startDate, endDate) {
+  const dates = dutyDatesByPerson.get(personId) || new Set();
+  for (let date = startDate; date <= endDate; date = addDays(date, 1)) if (dates.has(date)) return true;
+  return false;
+}
+
+function canWorkBlock(person, blockDays) {
+  if (blockDays.some((date) => hasHardConflict(person.id, date))) return false;
+  if ((annualDutyCount.get(person.id) || 0) + blockDays.length > annualDutyLimit) return false;
+  const first = blockDays[0];
+  const last = blockDays.at(-1);
+  if (!first || !last) return false;
+  return !hasDutyBetween(person.id, addDays(first, -14), addDays(first, -1)) && !hasDutyBetween(person.id, addDays(last, 1), addDays(last, 14));
+}
+
+function candidatePool(base, role, blockDays, crewIndex, required, usedInBlock) {
   const home = activePeople.filter((p) => p.role === role && p.homeBaseId === base.id && qualifiedForBase(p, base));
   const borrowed = activePeople.filter((p) => p.role === role && p.homeBaseId !== base.id && qualifiedForBase(p, base));
   const sorted = [...home, ...borrowed]
     .filter((person) => !usedInBlock.has(person.id))
+    .filter((person) => canWorkBlock(person, blockDays))
     .sort((a, b) => personCode(a).localeCompare(personCode(b)));
-  const start = required === 0 ? 0 : (crewIndex * required) % Math.max(sorted.length, 1);
-  const ordered = [...sorted.slice(start), ...sorted.slice(0, start)];
-  const selected = ordered.slice(0, required);
+  const neededForRotation = Math.max(required * 2, required);
+  const slotCount = Math.max(sorted.length, neededForRotation, 1);
+  const selected = [];
+  for (let index = 0; index < required; index += 1) {
+    const slot = required === 0 ? 0 : (crewIndex * required + index) % slotCount;
+    if (slot < sorted.length) selected.push(sorted[slot]);
+  }
   selected.forEach((person) => usedInBlock.add(person.id));
   if (selected.length < required) warnings.push(`${base.code}_${role}=missing_${required - selected.length}`);
   return selected;
@@ -104,20 +140,24 @@ for (let blockStart = firstBlockStart, blockIndex = 0; blockStart <= `${year}-12
   if (blockDays.length === 0) continue;
   const usedInBlock = new Set();
   for (const base of basesByConstraint) {
-    const pilots = candidatePool(base, "pilot", blockIndex, Number(base.minPilots || 0), usedInBlock);
-    const ts = candidatePool(base, "ts", blockIndex, Number(base.minTs || 0), usedInBlock);
+    const pilots = candidatePool(base, "pilot", blockDays, blockIndex, Number(base.minPilots || 0), usedInBlock);
+    const ts = candidatePool(base, "ts", blockDays, blockIndex, Number(base.minTs || 0), usedInBlock);
     for (const date of blockDays) {
       for (const person of [...pilots, ...ts]) {
         if (hasHardConflict(person.id, date)) continue;
         const id = `${person.id}_${date}`;
         generated.push({ id, personId: person.id, date, status: "work", baseId: base.id, note: `14/14 ${base.code} 2026`, updatedAt: new Date().toISOString() });
+        const dates = dutyDatesByPerson.get(person.id) || new Set();
+        dates.add(date);
+        dutyDatesByPerson.set(person.id, dates);
+        annualDutyCount.set(person.id, (annualDutyCount.get(person.id) || 0) + 1);
       }
     }
   }
 }
 
 const generatedIds = new Set(generated.map((a) => a.id));
-const oldGenerated2026 = existingAssignments.filter((a) => String(a.date || "").startsWith("2026-") && a.note?.includes("14/14") && !generatedIds.has(a.id));
+const oldGenerated2026 = existingAssignments.filter((a) => oldGeneratedIds.has(a.id || `${a.personId}_${a.date}`) && !generatedIds.has(a.id || `${a.personId}_${a.date}`));
 for (const item of oldGenerated2026) await db.collection("assignments").doc(item.id).delete();
 for (const item of generated) await db.collection("assignments").doc(item.id).set(item, { merge: true });
 await db.collection("auditLogs").doc(`audit_fill_2026_${Date.now()}`).set({
