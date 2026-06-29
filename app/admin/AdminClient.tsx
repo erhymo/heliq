@@ -21,8 +21,10 @@ type CoverageProposal = {
   warnings: string[];
   assignments: CoverageProposalAssignment[];
 };
+type ScheduleCellSelection = { personId: string; date: string };
+type ScheduleApplyOptions = { baseId?: string; projectId?: string; note?: string };
 
-const statuses = Object.keys(statusLabels) as ScheduleStatus[];
+const quickScheduleStatuses: ScheduleStatus[] = ["work", "vacation", "sick", "training", "standby", "travel", "off"];
 const todayYear = new Date().getFullYear();
 const PROJECT_COLOR = "#2563eb";
 
@@ -43,6 +45,13 @@ function daysInYear(year: number) {
     date.setUTCDate(date.getUTCDate() + 1);
   }
   return days;
+}
+
+function datesBetween(startDate: string, endDate: string) {
+  const dates: string[] = [];
+  const safeEndDate = endDate && endDate >= startDate ? endDate : startDate;
+  for (let date = startDate; date <= safeEndDate; date = addDays(date, 1)) dates.push(date);
+  return dates;
 }
 
 function prettyDate(iso: string) {
@@ -71,10 +80,8 @@ export default function AdminClient() {
   const [password, setPassword] = useState("");
   const [tab, setTab] = useState<Tab>("schedule");
   const [year, setYear] = useState(todayYear);
-  const [selectedPersonId, setSelectedPersonId] = useState("");
-  const [selectedStatus, setSelectedStatus] = useState<ScheduleStatus>("work");
-  const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [selectedBaseId, setSelectedBaseId] = useState("");
+  const [cellSelection, setCellSelection] = useState<ScheduleCellSelection | null>(null);
+  const [cellEndDate, setCellEndDate] = useState("");
   const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState<string[]>([]);
 
   useEffect(() => { load(); }, []);
@@ -139,17 +146,35 @@ export default function AdminClient() {
   const people = [...data.personnel].sort((a, b) => (a.role === b.role ? personCode(a).localeCompare(personCode(b)) : a.role === "pilot" ? -1 : 1));
   const assignmentsByKey = new Map(data.assignments.map((assignment) => [`${assignment.personId}_${assignment.date}`, assignment]));
   const days = daysInYear(year);
-  const activeProject = data.projects.find((project) => project.id === selectedProjectId);
-  const activeBase = data.bases.find((base) => base.id === selectedBaseId);
   const warnings = buildWarnings(data).slice(0, 8);
+  const selectedPersonId = "";
+  const selectedCellPerson = cellSelection ? data.personnel.find((person) => person.id === cellSelection.personId) : undefined;
+  const selectedCellAssignment = cellSelection ? assignmentsByKey.get(`${cellSelection.personId}_${cellSelection.date}`) : undefined;
 
-  async function clickCell(person: Personnel, date: string) {
+  function clickCell(person: Personnel, date: string) {
     if (selectedPersonId && selectedPersonId !== person.id) return;
-    const projectId = selectedProjectId || undefined;
-    const status = projectId ? "project" : selectedStatus === "project" ? "work" : selectedStatus;
-    const shouldUseBase = Boolean(selectedBaseId) || status === "work";
-    const baseId = projectId ? undefined : selectedBaseId || (shouldUseBase ? person.homeBaseId : undefined);
-    await mutate("toggleAssignment", { assignment: { personId: person.id, date, status, projectId, baseId } });
+    setCellSelection({ personId: person.id, date });
+    setCellEndDate(date);
+  }
+
+  async function applyCellStatus(status: ScheduleStatus, options: ScheduleApplyOptions = {}) {
+    if (!cellSelection || !data) return;
+    const person = data.personnel.find((candidate) => candidate.id === cellSelection.personId);
+    if (!person) return;
+    const projectId = status === "project" ? options.projectId : undefined;
+    const nextStatus = projectId ? "project" : status === "project" ? "work" : status;
+    const shouldUseBase = !projectId && (Boolean(options.baseId) || nextStatus === "work");
+    const baseId = projectId ? undefined : options.baseId || (shouldUseBase ? person.homeBaseId : undefined);
+    const dates = datesBetween(cellSelection.date, cellEndDate);
+    await mutate("setScheduleAssignments", { assignments: dates.map((date) => ({ personId: person.id, date, status: nextStatus, projectId, baseId, note: options.note })) });
+    setCellSelection(null);
+  }
+
+  async function clearCellAssignments() {
+    if (!cellSelection || !data) return;
+    const dates = datesBetween(cellSelection.date, cellEndDate);
+    await mutate("removeScheduleAssignments", { assignments: dates.map((date) => ({ personId: cellSelection.personId, date })) });
+    setCellSelection(null);
   }
 
   async function approveCoverageSuggestion(suggestion: CoverageProposal) {
@@ -175,10 +200,11 @@ export default function AdminClient() {
       </header>
       <main className="mx-auto max-w-[1800px] space-y-3 p-2 lg:p-3">
         {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
-        {tab === "schedule" && <ScheduleToolbar data={data} year={year} setYear={setYear} selectedPersonId={selectedPersonId} setSelectedPersonId={setSelectedPersonId} selectedStatus={selectedStatus} setSelectedStatus={setSelectedStatus} selectedProjectId={selectedProjectId} setSelectedProjectId={setSelectedProjectId} selectedBaseId={selectedBaseId} setSelectedBaseId={setSelectedBaseId} />}
-        {tab === "schedule" && <CoverageSuggestions suggestions={coverageSuggestions} totalHidden={Math.max(0, coverageSuggestions.length - 30)} onApprove={approveCoverageSuggestion} onDismiss={dismissCoverageSuggestion} />}
+        {tab === "schedule" && <ScheduleToolbar year={year} setYear={setYear} />}
+        {tab === "schedule" && <CoverageSuggestions suggestions={coverageSuggestions} totalHidden={Math.max(0, coverageSuggestions.length - 12)} onApprove={approveCoverageSuggestion} onDismiss={dismissCoverageSuggestion} />}
         {tab === "schedule" && warnings.length > 0 && <Warnings warnings={warnings} />}
-        {tab === "schedule" && <ScheduleGrid people={people} days={days} data={data} assignmentsByKey={assignmentsByKey} selectedPersonId={selectedPersonId} onCell={clickCell} activeProject={activeProject} activeBase={activeBase} />}
+        {tab === "schedule" && <ScheduleGrid people={people} days={days} data={data} assignmentsByKey={assignmentsByKey} selectedPersonId={selectedPersonId} selectedCell={cellSelection} onCell={clickCell} />}
+        {tab === "schedule" && cellSelection && selectedCellPerson && <ScheduleCellPopover key={`${cellSelection.personId}_${cellSelection.date}`} data={data} person={selectedCellPerson} date={cellSelection.date} endDate={cellEndDate} setEndDate={setCellEndDate} assignment={selectedCellAssignment} onApply={applyCellStatus} onClear={clearCellAssignments} onClose={() => setCellSelection(null)} />}
         {tab === "people" && <PeoplePanel data={data} mutate={mutate} />}
         {tab === "projects" && <ProjectsPanel data={data} mutate={mutate} />}
         {tab === "bases" && <BasesPanel data={data} mutate={mutate} />}
@@ -197,15 +223,12 @@ function tabLabel(tab: Tab) {
   return ({ schedule: "Schedule", people: "Personell", projects: "Prosjekter", bases: "Baser", quals: "Kvalifikasjoner", audit: "Logg" })[tab];
 }
 
-function ScheduleToolbar(props: { data: HeliqData; year: number; setYear: (y: number) => void; selectedPersonId: string; setSelectedPersonId: (v: string) => void; selectedStatus: ScheduleStatus; setSelectedStatus: (v: ScheduleStatus) => void; selectedProjectId: string; setSelectedProjectId: (v: string) => void; selectedBaseId: string; setSelectedBaseId: (v: string) => void }) {
+function ScheduleToolbar(props: { year: number; setYear: (y: number) => void }) {
   return (
-    <section className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:grid-cols-6">
-      <Select label="År" value={String(props.year)} onChange={(v) => props.setYear(Number(v))} options={[todayYear - 1, todayYear, todayYear + 1].map(String)} />
-      <Select label="Ansatt" value={props.selectedPersonId} onChange={props.setSelectedPersonId} options={["", ...props.data.personnel.map((p) => p.id)]} labels={{ "": "Klikk alle", ...Object.fromEntries(props.data.personnel.map((p) => [p.id, `${p.code} ${p.name}`])) }} />
-      <Select label="Status" value={props.selectedStatus} onChange={(v) => props.setSelectedStatus(v as ScheduleStatus)} options={statuses} labels={statusLabels} />
-      <Select label="Prosjekt" value={props.selectedProjectId} onChange={props.setSelectedProjectId} options={["", ...props.data.projects.map((p) => p.id)]} labels={{ "": "Ingen prosjekt", ...Object.fromEntries(props.data.projects.map((p) => [p.id, p.name])) }} />
-      <Select label="Base" value={props.selectedBaseId} onChange={props.setSelectedBaseId} options={["", ...props.data.bases.map((b) => b.id)]} labels={{ "": "Personens base", ...Object.fromEntries(props.data.bases.map((b) => [b.id, b.name])) }} />
-      <div className="rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-600">Klikk en dag for jobb på personens base. Velg prosjekt for å overstyre med prosjektkode.</div>
+    <section className="flex min-h-12 items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+      <label className="flex items-center gap-2 text-sm font-semibold text-slate-600">År<select value={String(props.year)} onChange={(event) => props.setYear(Number(event.target.value))} className="h-8 rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900">{[todayYear - 1, todayYear, todayYear + 1].map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
+      <div className="flex-1" />
+      <span className="hidden text-xs text-slate-400 sm:inline">Flere schedule-handlinger kommer her</span>
     </section>
   );
 }
@@ -214,7 +237,7 @@ function Select({ label, value, onChange, options, labels = {} }: { label: strin
   return <label className="text-sm font-semibold text-slate-600">{label}<select value={value} onChange={(e) => onChange(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-slate-900">{options.map((option) => <option key={option} value={option}>{labels[option] || option}</option>)}</select></label>;
 }
 
-function ScheduleGrid({ people, days, data, assignmentsByKey, selectedPersonId, onCell }: { people: Personnel[]; days: string[]; data: HeliqData; assignmentsByKey: Map<string, ScheduleAssignment>; selectedPersonId: string; onCell: (p: Personnel, d: string) => void; activeProject?: Project; activeBase?: Base }) {
+function ScheduleGrid({ people, days, data, assignmentsByKey, selectedPersonId, selectedCell, onCell }: { people: Personnel[]; days: string[]; data: HeliqData; assignmentsByKey: Map<string, ScheduleAssignment>; selectedPersonId: string; selectedCell: ScheduleCellSelection | null; onCell: (p: Personnel, d: string) => void }) {
   const projectById = new Map(data.projects.map((project) => [project.id, project]));
   const baseById = new Map(data.bases.map((base) => [base.id, base]));
   return (
@@ -222,13 +245,13 @@ function ScheduleGrid({ people, days, data, assignmentsByKey, selectedPersonId, 
       <div className="grid min-w-max" style={{ gridTemplateColumns: `7rem repeat(${people.length}, 4.25rem)` }}>
         <div className="sticky left-0 top-0 z-20 border-b border-r border-slate-200 bg-slate-100 p-2 text-[11px] font-bold uppercase text-slate-500">Dato</div>
         {people.map((person) => <div key={person.id} className={`sticky top-0 z-10 border-b border-r border-slate-200 bg-slate-100 p-1 text-center ${selectedPersonId && selectedPersonId !== person.id ? "opacity-40" : ""}`}><p className="text-sm font-bold">{personCode(person)}</p><p className="text-[9px] text-slate-500">{person.role === "ts" ? "TS" : "Pilot"}</p></div>)}
-        {days.map((day) => <Row key={day} day={day} people={people} assignmentsByKey={assignmentsByKey} projectById={projectById} baseById={baseById} selectedPersonId={selectedPersonId} onCell={onCell} />)}
+        {days.map((day) => <Row key={day} day={day} people={people} assignmentsByKey={assignmentsByKey} projectById={projectById} baseById={baseById} selectedPersonId={selectedPersonId} selectedCell={selectedCell} onCell={onCell} />)}
       </div>
     </section>
   );
 }
 
-function Row({ day, people, assignmentsByKey, projectById, baseById, selectedPersonId, onCell }: { day: string; people: Personnel[]; assignmentsByKey: Map<string, ScheduleAssignment>; projectById: Map<string, Project>; baseById: Map<string, Base>; selectedPersonId: string; onCell: (p: Personnel, d: string) => void }) {
+function Row({ day, people, assignmentsByKey, projectById, baseById, selectedPersonId, selectedCell, onCell }: { day: string; people: Personnel[]; assignmentsByKey: Map<string, ScheduleAssignment>; projectById: Map<string, Project>; baseById: Map<string, Base>; selectedPersonId: string; selectedCell: ScheduleCellSelection | null; onCell: (p: Personnel, d: string) => void }) {
   const weekend = [0, 6].includes(new Date(`${day}T00:00:00`).getDay());
   return <>{<div className={`sticky left-0 z-10 border-b border-r border-slate-200 p-2 text-xs font-semibold ${weekend ? "bg-slate-100" : "bg-white"}`}>{prettyDate(day)}</div>}{people.map((person) => {
     const assignment = assignmentsByKey.get(`${person.id}_${day}`);
@@ -236,8 +259,44 @@ function Row({ day, people, assignmentsByKey, projectById, baseById, selectedPer
     const base = assignment?.baseId ? baseById.get(assignment.baseId) : undefined;
     const color = project ? PROJECT_COLOR : base?.color;
     const cellCode = project ? shortCodeFromText(project.name) : base?.code || (assignment ? statusShort[assignment.status].slice(0, 3) : "");
-    return <button key={`${person.id}_${day}`} onClick={() => onCell(person, day)} className={`h-8 border-b border-r border-slate-200 p-0.5 text-center text-[10px] font-black transition hover:ring-2 hover:ring-blue-400 ${selectedPersonId && selectedPersonId !== person.id ? "opacity-40" : ""}`} style={{ background: color ? `${color}24` : weekend ? "#f8fafc" : "#fff", color: color || "#334155" }}>{cellCode}</button>;
+    const selected = selectedCell?.personId === person.id && selectedCell.date === day;
+    return <button key={`${person.id}_${day}`} onClick={() => onCell(person, day)} className={`h-8 border-b border-r border-slate-200 p-0.5 text-center text-[10px] font-black transition hover:ring-2 hover:ring-blue-400 ${selectedPersonId && selectedPersonId !== person.id ? "opacity-40" : ""} ${selected ? "ring-2 ring-blue-600" : ""}`} style={{ background: color ? `${color}24` : weekend ? "#f8fafc" : "#fff", color: color || "#334155" }}>{cellCode}</button>;
   })}</>;
+}
+
+function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignment, onApply, onClear, onClose }: { data: HeliqData; person: Personnel; date: string; endDate: string; setEndDate: (value: string) => void; assignment?: ScheduleAssignment; onApply: (status: ScheduleStatus, options?: ScheduleApplyOptions) => void; onClear: () => void; onClose: () => void }) {
+  const [baseId, setBaseId] = useState(assignment?.baseId || person.homeBaseId || "");
+  const [projectId, setProjectId] = useState(assignment?.projectId || "");
+  const [note, setNote] = useState(assignment?.note || "");
+  const base = data.bases.find((item) => item.id === baseId);
+  const project = data.projects.find((item) => item.id === projectId);
+  const baseLabel = base?.code || "ingen base";
+  return (
+    <div className="fixed right-4 top-24 z-50 w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase text-slate-500">Marker schedule</p>
+          <h3 className="mt-1 font-semibold text-slate-950">{personCode(person)} · {person.name}</h3>
+          <p className="text-sm text-slate-600">{prettyDate(date)}{assignment ? ` · nå: ${statusLabels[assignment.status]}` : ""}</p>
+        </div>
+        <button onClick={onClose} className="rounded-full border border-slate-200 px-2 py-1 text-xs font-bold text-slate-500 hover:bg-slate-50">Lukk</button>
+      </div>
+      <label className="mt-4 block text-sm font-semibold text-slate-600">Til dato<input type="date" value={endDate || date} min={date} onChange={(event) => setEndDate(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-slate-900" /></label>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <label className="text-xs font-semibold text-slate-600">Base<select value={baseId} onChange={(event) => setBaseId(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"><option value="">Ingen base</option>{data.bases.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
+        <label className="text-xs font-semibold text-slate-600">Prosjekt<select value={projectId} onChange={(event) => setProjectId(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"><option value="">Ingen prosjekt</option>{data.projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      </div>
+      {project && <button onClick={() => onApply("project", { projectId, note })} className="mt-3 w-full rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700">Prosjekt · {project.name}</button>}
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {quickScheduleStatuses.map((status) => <button key={status} onClick={() => onApply(status, { baseId: status === "work" ? baseId : undefined, note })} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800 hover:border-blue-300 hover:bg-blue-50">{status === "work" ? `Jobb · ${baseLabel}` : statusLabels[status]}</button>)}
+      </div>
+      <input value={note} onChange={(event) => setNote(event.target.value)} className="mt-3 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900" placeholder="Notat (valgfritt)" />
+      <div className="mt-3 flex gap-2 border-t border-slate-100 pt-3">
+        <button onClick={onClear} className="flex-1 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-800 hover:bg-rose-100">Fjern</button>
+        <button onClick={onClose} className="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Avbryt</button>
+      </div>
+    </div>
+  );
 }
 
 function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Set<string>): CoverageProposal[] {
@@ -332,40 +391,41 @@ function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Se
 }
 
 function CoverageSuggestions({ suggestions, totalHidden, onApprove, onDismiss }: { suggestions: CoverageProposal[]; totalHidden: number; onApprove: (suggestion: CoverageProposal) => void; onDismiss: (id: string) => void }) {
-  const visible = suggestions.slice(0, 30);
+  const visible = suggestions.slice(0, 12);
+  const totalPilotGaps = suggestions.reduce((sum, suggestion) => sum + suggestion.missingPilots, 0);
+  const totalTsGaps = suggestions.reduce((sum, suggestion) => sum + suggestion.missingTs, 0);
   if (suggestions.length === 0) {
-    return <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900"><span className="font-semibold">Dekningsforslag:</span> Alle baser ser dekket ut for valgt år med dagens regler.</section>;
+    return <section className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"><span className="font-semibold">Dekningsforslag:</span> Alle baser ser dekket ut for valgt år.</section>;
   }
   return (
-    <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="font-semibold text-blue-950">Forslag til full basedekning</h2>
-          <p className="mt-1 text-sm text-blue-800">Systemet foreslår 14/14-turnusblokker. Forslag og manuelle endringer blir først synlige i pilot/TS-appene når admin trykker Push schedule.</p>
+    <section className="rounded-xl border border-blue-200 bg-blue-50/70 px-3 py-2 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <h2 className="font-semibold text-blue-950">Dekningsforslag</h2>
+        <div className="flex flex-wrap gap-2 text-xs font-bold">
+          <span className="rounded-full bg-white px-2 py-1 text-blue-900">{suggestions.length} forslag</span>
+          <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-900">P {totalPilotGaps}</span>
+          <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-900">TS {totalTsGaps}</span>
         </div>
-        <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-blue-900">{suggestions.length} forslag</span>
       </div>
-      <div className="mt-3 grid gap-2 lg:grid-cols-2 xl:grid-cols-3">
-        {visible.map((suggestion) => (
-          <article key={suggestion.id} className="rounded-xl border border-blue-100 bg-white p-3 text-sm shadow-sm">
-            <div className="flex items-start justify-between gap-2">
-              <div><p className="font-bold text-slate-950">{suggestion.baseCode} · {suggestion.crewLabel}</p><p className="text-slate-600">{prettyDate(suggestion.startDate)} – {prettyDate(suggestion.endDate)}</p></div>
-              <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-bold text-blue-800">{suggestion.assignments.length} dager</span>
-            </div>
-            <div className="mt-2 space-y-1 text-xs text-slate-600">
-              <p><span className="font-semibold text-slate-800">Hull:</span> {suggestion.missingPilots} pilotdager / {suggestion.missingTs} TS-dager</p>
-              {suggestion.pilotNames.length > 0 && <p><span className="font-semibold text-slate-800">Piloter:</span> {suggestion.pilotNames.join(", ")}</p>}
-              {suggestion.tsNames.length > 0 && <p><span className="font-semibold text-slate-800">TS:</span> {suggestion.tsNames.join(", ")}</p>}
-              {suggestion.warnings.map((warning) => <p key={warning} className="rounded-lg bg-amber-50 p-2 text-amber-800">{warning}</p>)}
-            </div>
-            <div className="mt-3 flex gap-2">
-              <button onClick={() => onApprove(suggestion)} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white">OK, legg inn</button>
-              <button onClick={() => onDismiss(suggestion.id)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Avvis</button>
-            </div>
-          </article>
-        ))}
+      <div className="mt-2 max-h-52 overflow-auto rounded-lg border border-blue-100 bg-white">
+        {visible.map((suggestion) => {
+          const crew = [...suggestion.pilotNames, ...suggestion.tsNames].join(", ") || "Ingen ledige kandidater";
+          return (
+            <article key={suggestion.id} className="grid gap-2 border-b border-slate-100 p-2 text-xs last:border-b-0 lg:grid-cols-[8rem_10rem_9rem_1fr_auto] lg:items-center">
+              <div><p className="font-black text-slate-950">{suggestion.baseCode}</p><p className="text-slate-500">{suggestion.crewLabel}</p></div>
+              <p className="font-semibold text-slate-700">{prettyDate(suggestion.startDate)} – {prettyDate(suggestion.endDate)}</p>
+              <div className="flex flex-wrap gap-1 font-bold"><span className="rounded bg-amber-50 px-2 py-1 text-amber-800">P {suggestion.missingPilots}</span><span className="rounded bg-amber-50 px-2 py-1 text-amber-800">TS {suggestion.missingTs}</span><span className="rounded bg-blue-50 px-2 py-1 text-blue-800">{suggestion.assignments.length}</span></div>
+              <div className="min-w-0"><p className="truncate font-semibold text-slate-700" title={crew}>{crew}</p>{suggestion.warnings.length > 0 && <p className="truncate text-amber-700" title={suggestion.warnings.join(" · ")}>⚠ {suggestion.warnings.join(" · ")}</p>}</div>
+              <div className="flex gap-1 lg:justify-end">
+                <button onClick={() => onApprove(suggestion)} className="rounded-lg bg-slate-900 px-2.5 py-1.5 font-semibold text-white">Legg inn</button>
+                <button onClick={() => onDismiss(suggestion.id)} className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-700">Skjul</button>
+              </div>
+            </article>
+          );
+        })}
       </div>
-      {totalHidden > 0 && <p className="mt-3 text-xs text-blue-800">Viser de første 30 forslagene. {totalHidden} flere kommer frem etter hvert som du godkjenner eller avviser.</p>}
+      {suggestions.length > visible.length && <p className="mt-1 text-xs text-blue-800">Viser {visible.length} av {suggestions.length}. Godkjenn eller skjul forslag for å se flere.</p>}
+      {totalHidden > 0 && <p className="mt-1 text-xs text-blue-800">{totalHidden} ekstra forslag er skjult i gjeldende visning.</p>}
     </section>
   );
 }

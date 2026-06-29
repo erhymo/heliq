@@ -8,6 +8,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "sync:vercel-env": "node scripts/sync-vercel-env.mjs",
+    "check:firebase-admin": "node scripts/check-firebase-admin.mjs",
+    "check:vercel-env": "node scripts/check-vercel-pulled-env.mjs",
     "firebase:rules": "firebase deploy --only firestore:rules,firestore:indexes",
     "vercel:preview": "vercel",
     "vercel:prod": "vercel --prod"

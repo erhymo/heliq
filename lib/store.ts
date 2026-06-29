@@ -213,6 +213,39 @@ export async function toggleAssignment(input: { personId: string; date: string; 
   return publicData(data);
 }
 
+export async function setScheduleAssignments(input: { assignments: Array<{ personId: string; date: string; status: ScheduleStatus; baseId?: string; projectId?: string; note?: string }> }, actor: string) {
+  const data = await getHeliqData();
+  const now = new Date().toISOString();
+  const nextAssignments = input.assignments.map((assignment) => ({
+    id: `${assignment.personId}_${assignment.date}`,
+    personId: assignment.personId,
+    date: assignment.date,
+    status: assignment.status,
+    baseId: assignment.baseId,
+    projectId: assignment.projectId,
+    note: assignment.note || "",
+    updatedAt: now,
+  }));
+  const nextIds = new Set(nextAssignments.map((assignment) => assignment.id));
+  data.assignments = [...nextAssignments, ...data.assignments.filter((assignment) => !nextIds.has(assignment.id))];
+  await audit(data, actor, "setScheduleAssignments", "schedule", `${nextAssignments.length} schedulelinjer satt`);
+  const db = getAdminDb();
+  if (db) await Promise.all(nextAssignments.map((assignment) => writeCollectionDoc("assignments", assignment)));
+  else await writeLocal(data);
+  return publicData(data);
+}
+
+export async function removeScheduleAssignments(input: { assignments: Array<{ personId: string; date: string }> }, actor: string) {
+  const data = await getHeliqData();
+  const ids = new Set(input.assignments.map((assignment) => `${assignment.personId}_${assignment.date}`));
+  data.assignments = data.assignments.filter((assignment) => !ids.has(assignment.id));
+  await audit(data, actor, "removeScheduleAssignments", "schedule", `${ids.size} schedulelinjer fjernet`);
+  const db = getAdminDb();
+  if (db) await Promise.all([...ids].map((id) => db.collection("assignments").doc(id).delete()));
+  else await writeLocal(data);
+  return publicData(data);
+}
+
 export async function applyCoverageAssignments(input: { assignments: Array<{ personId: string; date: string; baseId: string; note?: string }> }, actor: string) {
   const data = await getHeliqData();
   const nextAssignments = input.assignments.map((assignment) => ({

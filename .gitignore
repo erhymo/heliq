@@ -3,8 +3,10 @@ node_modules
 .vercel
 out
 .env*.local
+firebase-service-account.local.json
+*firebase-adminsdk*.json
 *.tsbuildinfo
 data/*.local.json
 firebase-debug.log
 firestore-debug.log
-.vercel
+*.local.log
