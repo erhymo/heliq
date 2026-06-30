@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { createDemoData } from "@/lib/demoData";
 import { getAdminDb } from "@/lib/firebaseAdmin";
+import { validateScheduleAssignments } from "@/lib/scheduleRules";
 import { hashPin, newId } from "@/lib/security";
 import type { AuditLog, Base, HeliqData, Personnel, Project, Qualification, ScheduleAssignment, ScheduleStatus } from "@/lib/types";
 
@@ -86,6 +87,52 @@ function stripUndefined<T>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).map(([key, item]) => [key, stripUndefined(item)])) as T;
 }
 
+function comparableDoc(value: unknown): unknown {
+  const clean = stripUndefined(value);
+  if (Array.isArray(clean)) return clean.map(comparableDoc);
+  if (!clean || typeof clean !== "object") return clean;
+  return Object.fromEntries(Object.entries(clean).filter(([key]) => key !== "updatedAt").map(([key, item]) => [key, comparableDoc(item)]));
+}
+
+function sameDoc(a: unknown, b: unknown) {
+  return JSON.stringify(comparableDoc(a)) === JSON.stringify(comparableDoc(b));
+}
+
+async function writeChangedDocs<T extends { id: string }>(collection: string, nextItems: T[], existingItems: T[] = []) {
+  const db = getAdminDb();
+  if (!db) return;
+  const existingById = new Map(existingItems.map((item) => [item.id, item]));
+  const changed = nextItems.filter((item) => !sameDoc(existingById.get(item.id), item));
+  for (let index = 0; index < changed.length; index += 450) {
+    const batch = db.batch();
+    for (const item of changed.slice(index, index + 450)) batch.set(db.collection(collection).doc(item.id), stripUndefined(item), { merge: true });
+    await batch.commit();
+  }
+}
+
+async function syncCollectionDocs<T extends { id: string }>(collection: string, nextItems: T[], existingItems: T[] = []) {
+  const db = getAdminDb();
+  if (!db) return;
+  const nextIds = new Set(nextItems.map((item) => item.id));
+  const deletes = existingItems.filter((item) => !nextIds.has(item.id));
+  for (let index = 0; index < deletes.length; index += 450) {
+    const batch = db.batch();
+    for (const item of deletes.slice(index, index + 450)) batch.delete(db.collection(collection).doc(item.id));
+    await batch.commit();
+  }
+  await writeChangedDocs(collection, nextItems, existingItems);
+}
+
+async function deleteDocsBatched(collection: string, ids: string[]) {
+  const db = getAdminDb();
+  if (!db) return;
+  for (let index = 0; index < ids.length; index += 450) {
+    const batch = db.batch();
+    for (const id of ids.slice(index, index + 450)) batch.delete(db.collection(collection).doc(id));
+    await batch.commit();
+  }
+}
+
 async function clearCollection(collection: string) {
   const db = getAdminDb();
   if (!db) return;
@@ -123,12 +170,12 @@ export async function seedDemo(actor = "admin") {
 
 export async function pushSchedule(actor: string) {
   const data = await getHeliqData();
-  data.publishedAssignments = data.assignments.map((assignment) => ({ ...assignment, updatedAt: new Date().toISOString() }));
+  const existingPublished = data.publishedAssignments;
+  data.publishedAssignments = data.assignments.map((assignment) => ({ ...assignment }));
   await audit(data, actor, "pushSchedule", "schedule", `${data.publishedAssignments.length} schedulelinjer publisert`);
   const db = getAdminDb();
   if (db) {
-    await clearCollection("publishedAssignments");
-    await Promise.all(data.publishedAssignments.map((assignment) => writeCollectionDoc("publishedAssignments", assignment)));
+    await syncCollectionDocs("publishedAssignments", data.publishedAssignments, existingPublished);
   } else {
     await writeLocal(data);
   }
@@ -219,7 +266,12 @@ export async function toggleAssignment(input: { personId: string; date: string; 
   const existing = data.assignments.find((a) => a.id === id);
   const same = existing && existing.status === input.status && existing.baseId === input.baseId && existing.projectId === input.projectId;
   if (same) data.assignments = data.assignments.filter((a) => a.id !== id);
-  else data.assignments = [scheduleAssignment(input), ...data.assignments.filter((a) => a.id !== id)];
+  else {
+    const next = scheduleAssignment(input);
+    const errors = validateScheduleAssignments(data, [next]);
+    if (errors.length) throw new Error(errors.join("\n"));
+    data.assignments = [next, ...data.assignments.filter((a) => a.id !== id)];
+  }
   await audit(data, actor, same ? "removeAssignment" : "setAssignment", id, `${same ? "Fjernet" : "Satt"} ${input.personId} ${input.date}`);
   const db = getAdminDb();
   if (db) same ? await db.collection("assignments").doc(id).delete() : await writeCollectionDoc("assignments", data.assignments[0]);
@@ -231,11 +283,14 @@ export async function setScheduleAssignments(input: { assignments: Array<{ perso
   const data = await getHeliqData();
   const now = new Date().toISOString();
   const nextAssignments = input.assignments.map((assignment) => scheduleAssignment(assignment, now));
+  const errors = validateScheduleAssignments(data, nextAssignments);
+  if (errors.length) throw new Error(errors.join("\n"));
   const nextIds = new Set(nextAssignments.map((assignment) => assignment.id));
+  const existingAssignments = data.assignments;
   data.assignments = [...nextAssignments, ...data.assignments.filter((assignment) => !nextIds.has(assignment.id))];
   await audit(data, actor, "setScheduleAssignments", "schedule", `${nextAssignments.length} schedulelinjer satt`);
   const db = getAdminDb();
-  if (db) await Promise.all(nextAssignments.map((assignment) => writeCollectionDoc("assignments", assignment)));
+  if (db) await writeChangedDocs("assignments", nextAssignments, existingAssignments);
   else await writeLocal(data);
   return publicData(data);
 }
@@ -246,14 +301,14 @@ export async function removeScheduleAssignments(input: { assignments: Array<{ pe
   data.assignments = data.assignments.filter((assignment) => !ids.has(assignment.id));
   await audit(data, actor, "removeScheduleAssignments", "schedule", `${ids.size} schedulelinjer fjernet`);
   const db = getAdminDb();
-  if (db) await Promise.all([...ids].map((id) => db.collection("assignments").doc(id).delete()));
+  if (db) await deleteDocsBatched("assignments", [...ids]);
   else await writeLocal(data);
   return publicData(data);
 }
 
 export async function applyCoverageAssignments(input: { assignments: Array<{ personId: string; date: string; baseId: string; note?: string }> }, actor: string) {
   const data = await getHeliqData();
-  const nextAssignments = input.assignments.map((assignment) => ({
+  const nextAssignments: ScheduleAssignment[] = input.assignments.map((assignment) => ({
     id: `${assignment.personId}_${assignment.date}`,
     personId: assignment.personId,
     date: assignment.date,
@@ -262,11 +317,14 @@ export async function applyCoverageAssignments(input: { assignments: Array<{ per
     note: assignment.note || "Dekningsforslag godkjent",
     updatedAt: new Date().toISOString(),
   }));
+  const errors = validateScheduleAssignments(data, nextAssignments);
+  if (errors.length) throw new Error(errors.join("\n"));
   const nextIds = new Set(nextAssignments.map((assignment) => assignment.id));
+  const existingAssignments = data.assignments;
   data.assignments = [...nextAssignments, ...data.assignments.filter((assignment) => !nextIds.has(assignment.id))];
   await audit(data, actor, "applyCoverageSuggestion", "coverage", `${nextAssignments.length} dekningsforslag godkjent`);
   const db = getAdminDb();
-  if (db) await Promise.all(nextAssignments.map((assignment) => writeCollectionDoc("assignments", assignment)));
+  if (db) await writeChangedDocs<ScheduleAssignment>("assignments", nextAssignments, existingAssignments);
   else await writeLocal(data);
   return publicData(data);
 }

@@ -2,53 +2,22 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import HeliqLogo from "@/components/HeliqLogo";
+import { addDays, buildCellCandidateSuggestions, buildCoverageGaps, daysInYear, DUTY_STATUSES, HARD_CONFLICT_STATUSES, mondayOnOrBefore, personCode, type CellCandidateSuggestion, type CoverageGap, type CoverageProposal, type CoverageProposalAssignment } from "@/lib/scheduleRules";
 import type { Base, HeliqData, Personnel, Project, QualificationKind, Role, ScheduleAssignment, ScheduleStatus } from "@/lib/types";
 import { statusColor, statusLabels, statusShort } from "@/lib/types";
 
 type Tab = "schedule" | "people" | "projects" | "bases" | "quals" | "audit";
-type CoverageProposalAssignment = { personId: string; date: string; baseId: string; note?: string };
-type CoverageProposal = {
-  id: string;
-  startDate: string;
-  endDate: string;
-  baseId: string;
-  baseCode: string;
-  crewLabel: string;
-  missingPilots: number;
-  missingTs: number;
-  pilotNames: string[];
-  tsNames: string[];
-  warnings: string[];
-  assignments: CoverageProposalAssignment[];
-};
 type ScheduleCellSelection = { personId: string; date: string };
 type ScheduleApplyOptions = { personId?: string; baseId?: string; projectId?: string; note?: string; startDate?: string; endDate?: string };
-type CellCandidateSuggestion = { base: Base; role: "pilot" | "ts"; person: Personnel; startDate: string; endDate: string };
 type SchedulePopoverAction = "set" | "remove";
 
 const quickScheduleStatuses: ScheduleStatus[] = ["work", "sold_day", "vacation", "sick", "training", "standby", "travel", "off"];
-const dutyStatuses = new Set<ScheduleStatus>(["work", "project", "training", "standby", "travel"]);
-const hardConflictStatuses = new Set<ScheduleStatus>(["work", "project", "vacation", "sick", "training", "standby", "sold_day", "travel", "off"]);
 const todayYear = new Date().getFullYear();
 const PROJECT_COLOR = "#2563eb";
 
 function shortCodeFromText(text: string, fallback = "---") {
   const clean = text.trim().split(/\s+/).at(-1)?.replace(/[^A-Za-zÆØÅæøå]/g, "") || text.replace(/[^A-Za-zÆØÅæøå]/g, "");
   return (clean || fallback).slice(0, 3).toUpperCase();
-}
-
-function personCode(person: Pick<Personnel, "name" | "code">) {
-  return shortCodeFromText(person.name, person.code || "---");
-}
-
-function daysInYear(year: number) {
-  const days: string[] = [];
-  const date = new Date(Date.UTC(year, 0, 1));
-  while (date.getUTCFullYear() === year) {
-    days.push(date.toISOString().slice(0, 10));
-    date.setUTCDate(date.getUTCDate() + 1);
-  }
-  return days;
 }
 
 function datesBetween(startDate: string, endDate: string) {
@@ -61,19 +30,6 @@ function datesBetween(startDate: string, endDate: string) {
 function prettyDate(iso: string) {
   const date = new Date(`${iso}T00:00:00`);
   return date.toLocaleDateString("no-NO", { day: "2-digit", month: "short", weekday: "short" });
-}
-
-function addDays(iso: string, days: number) {
-  const date = new Date(`${iso}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function mondayOnOrBefore(iso: string) {
-  const date = new Date(`${iso}T00:00:00Z`);
-  const day = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() - (day - 1));
-  return date.toISOString().slice(0, 10);
 }
 
 export default function AdminClient() {
@@ -90,6 +46,7 @@ export default function AdminClient() {
 
   useEffect(() => { load(); }, []);
   const coverageSuggestions = useMemo(() => data ? buildCoverageSuggestions(data, daysInYear(year), new Set(dismissedSuggestionIds)) : [], [data, year, dismissedSuggestionIds]);
+  const coverageGaps = useMemo(() => data ? buildCoverageGaps(data, daysInYear(year)) : [], [data, year]);
 
   async function load() {
     setLoading(true);
@@ -207,7 +164,7 @@ export default function AdminClient() {
       <main className="mx-auto max-w-[1800px] space-y-3 p-2 lg:p-3">
         {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
         {tab === "schedule" && <ScheduleToolbar year={year} setYear={setYear} />}
-        {tab === "schedule" && <CoverageSuggestions suggestions={coverageSuggestions} totalHidden={Math.max(0, coverageSuggestions.length - 12)} onApprove={approveCoverageSuggestion} onDismiss={dismissCoverageSuggestion} />}
+        {tab === "schedule" && <CoverageSuggestions suggestions={coverageSuggestions} gaps={coverageGaps} totalHidden={Math.max(0, coverageSuggestions.length - 12)} onApprove={approveCoverageSuggestion} onDismiss={dismissCoverageSuggestion} />}
         {tab === "schedule" && warnings.length > 0 && <Warnings warnings={warnings} />}
         {tab === "schedule" && <ScheduleGrid people={people} days={days} data={data} assignmentsByKey={assignmentsByKey} selectedPersonId={selectedPersonId} selectedCell={cellSelection} onCell={clickCell} />}
         {tab === "schedule" && cellSelection && selectedCellPerson && <ScheduleCellPopover key={`${cellSelection.personId}_${cellSelection.date}`} data={data} person={selectedCellPerson} date={cellSelection.date} endDate={cellEndDate} setEndDate={setCellEndDate} assignment={selectedCellAssignment} suggestions={selectedCellSuggestions} onApply={applyCellStatus} onRemove={removeCellAssignments} onClose={() => setCellSelection(null)} />}
@@ -343,62 +300,6 @@ function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignme
   );
 }
 
-function buildCellCandidateSuggestions(data: HeliqData, date: string): CellCandidateSuggestion[] {
-  const year = date.slice(0, 4);
-  const annualDutyLimit = Math.ceil(daysInYear(Number(year)).length / 2);
-  const activePeople = data.personnel.filter((person) => person.active && (person.role === "pilot" || person.role === "ts"));
-  const assignmentsByKey = new Map(data.assignments.map((assignment) => [`${assignment.personId}_${assignment.date}`, assignment]));
-  const blockStart = mondayOnOrBefore(date);
-  const blockDays = Array.from({ length: 14 }, (_, index) => addDays(blockStart, index)).filter((day) => day.startsWith(year));
-  const blockFirst = blockDays[0] || date;
-  const blockEnd = blockDays.at(-1) || date;
-
-  function qualifiedForBase(person: Personnel, base: Base) {
-    return base.requiredQualificationIds.every((id) => person.qualificationIds.includes(id));
-  }
-
-  function roleCount(base: Base, role: "pilot" | "ts") {
-    return data.assignments
-      .filter((assignment) => assignment.date === date && assignment.baseId === base.id)
-      .map((assignment) => data.personnel.find((person) => person.id === assignment.personId))
-      .filter((person): person is Personnel => person !== undefined && person.role === role).length;
-  }
-
-  function dutyCount(personId: string) {
-    return data.assignments.filter((assignment) => assignment.personId === personId && assignment.date.startsWith(year) && dutyStatuses.has(assignment.status)).length;
-  }
-
-  function hasDutyBetween(personId: string, startDate: string, endDate: string) {
-    for (let current = startDate; current <= endDate; current = addDays(current, 1)) {
-      const assignment = assignmentsByKey.get(`${personId}_${current}`);
-      if (assignment && dutyStatuses.has(assignment.status)) return true;
-    }
-    return false;
-  }
-
-  function canWorkBlock(person: Personnel) {
-    if (blockDays.some((day) => {
-      const assignment = assignmentsByKey.get(`${person.id}_${day}`);
-      return assignment ? hardConflictStatuses.has(assignment.status) : false;
-    })) return false;
-    if (dutyCount(person.id) + blockDays.length > annualDutyLimit) return false;
-    return !hasDutyBetween(person.id, addDays(blockStart, -14), addDays(blockStart, -1)) && !hasDutyBetween(person.id, addDays(blockEnd, 1), addDays(blockEnd, 14));
-  }
-
-  const suggestions: CellCandidateSuggestion[] = [];
-  for (const base of data.bases) {
-    for (const role of ["pilot", "ts"] as const) {
-      const missing = Math.max(0, Number(role === "pilot" ? base.minPilots : base.minTs) - roleCount(base, role));
-      if (missing === 0) continue;
-      const candidates = activePeople
-        .filter((person) => person.role === role && qualifiedForBase(person, base) && canWorkBlock(person))
-        .sort((a, b) => Number(b.homeBaseId === base.id) - Number(a.homeBaseId === base.id) || dutyCount(a.id) - dutyCount(b.id) || personCode(a).localeCompare(personCode(b)));
-      if (candidates[0]) suggestions.push({ base, role, person: candidates[0], startDate: blockFirst, endDate: blockEnd });
-    }
-  }
-  return suggestions;
-}
-
 function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Set<string>): CoverageProposal[] {
   const today = new Date().toISOString().slice(0, 10);
   const activePeople = data.personnel.filter((person) => person.active && (person.role === "pilot" || person.role === "ts"));
@@ -417,18 +318,18 @@ function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Se
   function personHasConflict(personId: string, blockDays: string[]) {
     return blockDays.some((date) => {
       const assignment = assignmentsByPersonDate.get(`${personId}_${date}`);
-      return assignment ? hardConflictStatuses.has(assignment.status) : false;
+      return assignment ? HARD_CONFLICT_STATUSES.has(assignment.status) : false;
     });
   }
 
   function personDutyCount(personId: string) {
-    return data.assignments.filter((assignment) => assignment.personId === personId && assignment.date.startsWith(year) && dutyStatuses.has(assignment.status)).length;
+    return data.assignments.filter((assignment) => assignment.personId === personId && assignment.date.startsWith(year) && DUTY_STATUSES.has(assignment.status)).length;
   }
 
   function personHasDutyBetween(personId: string, startDate: string, endDate: string) {
     for (let date = startDate; date <= endDate; date = addDays(date, 1)) {
       const assignment = assignmentsByPersonDate.get(`${personId}_${date}`);
-      if (assignment && dutyStatuses.has(assignment.status)) return true;
+      if (assignment && DUTY_STATUSES.has(assignment.status)) return true;
     }
     return false;
   }
@@ -518,11 +419,12 @@ function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Se
   return proposals;
 }
 
-function CoverageSuggestions({ suggestions, totalHidden, onApprove, onDismiss }: { suggestions: CoverageProposal[]; totalHidden: number; onApprove: (suggestion: CoverageProposal) => void; onDismiss: (id: string) => void }) {
+function CoverageSuggestions({ suggestions, gaps, totalHidden, onApprove, onDismiss }: { suggestions: CoverageProposal[]; gaps: CoverageGap[]; totalHidden: number; onApprove: (suggestion: CoverageProposal) => void; onDismiss: (id: string) => void }) {
   const visible = suggestions.slice(0, 12);
   const totalPilotGaps = suggestions.reduce((sum, suggestion) => sum + suggestion.missingPilots, 0);
   const totalTsGaps = suggestions.reduce((sum, suggestion) => sum + suggestion.missingTs, 0);
-  if (suggestions.length === 0) {
+  const visibleGaps = gaps.slice(0, 8);
+  if (suggestions.length === 0 && gaps.length === 0) {
     return <section className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"><span className="font-semibold">Dekningsforslag:</span> Alle baser ser dekket ut for valgt år.</section>;
   }
   return (
@@ -531,11 +433,14 @@ function CoverageSuggestions({ suggestions, totalHidden, onApprove, onDismiss }:
         <h2 className="font-semibold text-blue-950">Dekningsforslag</h2>
         <div className="flex flex-wrap gap-2 text-xs font-bold">
           <span className="rounded-full bg-white px-2 py-1 text-blue-900">{suggestions.length} forslag</span>
+          <span className="rounded-full bg-rose-100 px-2 py-1 text-rose-900">{gaps.length} hull</span>
           <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-900">P {totalPilotGaps}</span>
           <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-900">TS {totalTsGaps}</span>
         </div>
       </div>
-      <div className="mt-2 max-h-52 overflow-auto rounded-lg border border-blue-100 bg-white">
+      {visibleGaps.length > 0 && <div className="mt-2 rounded-lg border border-rose-100 bg-white p-2 text-xs text-rose-900"><p className="font-bold">Udekkede basekrav uten sikker løsning</p><div className="mt-1 grid gap-1 lg:grid-cols-2">{visibleGaps.map((gap) => <p key={gap.id} className="truncate" title={gap.reasons.join(" · ")}>{gap.baseCode} {prettyDate(gap.date)} · P {gap.missingPilots} / TS {gap.missingTs}{gap.reasons.length ? ` · ${gap.reasons.join(" · ")}` : ""}</p>)}</div>{gaps.length > visibleGaps.length && <p className="mt-1 text-rose-700">Viser {visibleGaps.length} av {gaps.length} hull.</p>}</div>}
+      {visible.length === 0 && <p className="mt-2 rounded-lg bg-white p-2 text-xs font-semibold text-slate-700">Ingen lovlige automatiske forslag akkurat nå. Hullene må løses med kvalifikasjoner, baseoppsett eller mer personell.</p>}
+      {visible.length > 0 && <div className="mt-2 max-h-52 overflow-auto rounded-lg border border-blue-100 bg-white">
         {visible.map((suggestion) => {
           const crew = [...suggestion.pilotNames, ...suggestion.tsNames].join(", ") || "Ingen ledige kandidater";
           return (
@@ -551,7 +456,7 @@ function CoverageSuggestions({ suggestions, totalHidden, onApprove, onDismiss }:
             </article>
           );
         })}
-      </div>
+      </div>}
       {suggestions.length > visible.length && <p className="mt-1 text-xs text-blue-800">Viser {visible.length} av {suggestions.length}. Godkjenn eller skjul forslag for å se flere.</p>}
       {totalHidden > 0 && <p className="mt-1 text-xs text-blue-800">{totalHidden} ekstra forslag er skjult i gjeldende visning.</p>}
     </section>
