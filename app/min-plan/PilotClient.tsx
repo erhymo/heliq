@@ -5,6 +5,12 @@ import HeliqLogo from "@/components/HeliqLogo";
 import type { HeliqData, Personnel, ScheduleAssignment } from "@/lib/types";
 import { statusColor, statusLabels } from "@/lib/types";
 
+function loadErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "Ukjent feil");
+  if (message.toLowerCase().includes("resource_exhausted") || message.toLowerCase().includes("quota") || message.startsWith("8 ")) return "Firestore-kvoten er brukt opp akkurat nå. Prøv igjen senere.";
+  return message;
+}
+
 export default function PilotClient() {
   const [pin, setPin] = useState("");
   const [data, setData] = useState<HeliqData | null>(null);
@@ -16,12 +22,21 @@ export default function PilotClient() {
 
   async function load() {
     setLoading(true);
-    const response = await fetch("/api/app-data", { cache: "no-store" });
-    if (response.status === 401) { setData(null); setLoading(false); return; }
-    const payload = await response.json();
-    setData(payload.data);
-    setPersonId(payload.session.personId || "");
-    setLoading(false);
+    setError("");
+    try {
+      const response = await fetch("/api/app-data", { cache: "no-store" });
+      if (response.status === 401) { setData(null); setPersonId(""); return; }
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Kunne ikke laste Min plan");
+      setData(payload.data);
+      setPersonId(payload.session.personId || "");
+    } catch (error) {
+      setData(null);
+      setPersonId("");
+      setError(loadErrorMessage(error));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function login(event: FormEvent) {

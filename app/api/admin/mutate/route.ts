@@ -2,6 +2,14 @@ import { NextResponse } from "next/server";
 import { getAdminSession } from "@/lib/security";
 import { applyCoverageAssignments, pushSchedule, removeScheduleAssignments, seedDemo, setScheduleAssignments, toggleAssignment, upsertBase, upsertBaseWithMembership, upsertPersonnel, upsertProject, upsertQualification } from "@/lib/store";
 
+function mutationError(error: unknown) {
+  const message = error instanceof Error ? error.message : "Ukjent feil";
+  if (message.toLowerCase().includes("resource_exhausted") || message.toLowerCase().includes("quota") || message.startsWith("8 ")) {
+    return { message: "Firestore-kvoten er brukt opp akkurat nå. Prøv igjen senere, eller øk Firebase-kvoten.", status: 503 };
+  }
+  return { message, status: 400 };
+}
+
 export async function POST(request: Request) {
   const session = await getAdminSession();
   if (!session) return NextResponse.json({ error: "Ikke admin" }, { status: 401 });
@@ -21,6 +29,7 @@ export async function POST(request: Request) {
     if (body.action === "applyCoverageAssignments") return NextResponse.json({ data: await applyCoverageAssignments(body, actor) });
     return NextResponse.json({ error: "Ukjent handling" }, { status: 400 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Ukjent feil" }, { status: 400 });
+    const mapped = mutationError(error);
+    return NextResponse.json({ error: mapped.message }, { status: mapped.status });
   }
 }

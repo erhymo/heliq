@@ -15,6 +15,12 @@ const quickScheduleStatuses: ScheduleStatus[] = ["work", "sold_day", "vacation",
 const todayYear = new Date().getFullYear();
 const PROJECT_COLOR = "#2563eb";
 
+function loadErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "Ukjent feil");
+  if (message.toLowerCase().includes("resource_exhausted") || message.toLowerCase().includes("quota") || message.startsWith("8 ")) return "Firestore-kvoten er brukt opp akkurat nå. Prøv igjen senere, eller øk Firebase-kvoten.";
+  return message;
+}
+
 function shortCodeFromText(text: string, fallback = "---") {
   const clean = text.trim().split(/\s+/).at(-1)?.replace(/[^A-Za-zÆØÅæøå]/g, "") || text.replace(/[^A-Za-zÆØÅæøå]/g, "");
   return (clean || fallback).slice(0, 3).toUpperCase();
@@ -50,11 +56,19 @@ export default function AdminClient() {
 
   async function load() {
     setLoading(true);
-    const response = await fetch("/api/app-data", { cache: "no-store" });
-    if (response.status === 401) { setData(null); setLoading(false); return; }
-    const payload = await response.json();
-    setData(payload.data);
-    setLoading(false);
+    setError("");
+    try {
+      const response = await fetch("/api/app-data", { cache: "no-store" });
+      if (response.status === 401) { setData(null); return; }
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Kunne ikke laste Heliq-data");
+      setData(payload.data);
+    } catch (error) {
+      setData(null);
+      setError(loadErrorMessage(error));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function login(event: FormEvent) {
