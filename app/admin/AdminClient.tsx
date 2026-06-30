@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import HeliqLogo from "@/components/HeliqLogo";
-import { addDays, buildCellCandidateSuggestions, buildCoverageGaps, daysInYear, DUTY_STATUSES, HARD_CONFLICT_STATUSES, mondayOnOrBefore, personCode, type CellCandidateSuggestion, type CoverageGap, type CoverageProposal, type CoverageProposalAssignment } from "@/lib/scheduleRules";
+import { addDays, buildCellCandidateSuggestions, buildCoverageGaps, daysInYear, DUTY_STATUSES, HARD_CONFLICT_STATUSES, mondayOnOrBefore, personCode, qualifiedForBase, type CellCandidateSuggestion, type CoverageGap, type CoverageProposal, type CoverageProposalAssignment } from "@/lib/scheduleRules";
 import type { Base, HeliqData, Personnel, Project, QualificationKind, Role, ScheduleAssignment, ScheduleStatus } from "@/lib/types";
 import { statusColor, statusLabels, statusShort } from "@/lib/types";
 
@@ -311,10 +311,6 @@ function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Se
   const lastDay = days.at(-1) || `${year}-12-31`;
   const futureStart = today > `${year}-01-01` ? today : `${year}-01-01`;
 
-  function qualifiedForBase(person: Personnel, base: Base) {
-    return base.requiredQualificationIds.every((id) => person.qualificationIds.includes(id));
-  }
-
   function personHasConflict(personId: string, blockDays: string[]) {
     return blockDays.some((date) => {
       const assignment = assignmentsByPersonDate.get(`${personId}_${date}`);
@@ -351,8 +347,8 @@ function buildCoverageSuggestions(data: HeliqData, days: string[], dismissed: Se
   }
 
   function candidatePool(base: Base, role: "pilot" | "ts", blockDays: string[], crewIndex: number, required: number) {
-    const homeBase = activePeople.filter((person) => person.role === role && person.homeBaseId === base.id && qualifiedForBase(person, base));
-    const borrowed = activePeople.filter((person) => person.role === role && person.homeBaseId !== base.id && qualifiedForBase(person, base));
+    const homeBase = activePeople.filter((person) => person.role === role && person.homeBaseId === base.id && qualifiedForBase(person, base, data.qualifications));
+    const borrowed = activePeople.filter((person) => person.role === role && person.homeBaseId !== base.id && qualifiedForBase(person, base, data.qualifications));
     const sorted = [...homeBase, ...borrowed].filter((person) => personCanWorkBlock(person, blockDays));
     const homeBaseCount = homeBase.length;
     const neededForRotation = Math.max(required * 2, required);

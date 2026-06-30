@@ -1,4 +1,4 @@
-import type { Base, HeliqData, Personnel, ScheduleAssignment, ScheduleStatus } from "@/lib/types";
+import type { Base, HeliqData, Personnel, Qualification, ScheduleAssignment, ScheduleStatus } from "@/lib/types";
 
 export type CrewRole = "pilot" | "ts";
 export type ScheduleRuleAssignment = Pick<ScheduleAssignment, "personId" | "date" | "status" | "baseId" | "projectId" | "note">;
@@ -39,18 +39,35 @@ export function annualDutyLimit(year: number) {
   return Math.ceil(daysInYear(year).length / 2);
 }
 
-export function expandedQualificationIds(person: Pick<Personnel, "qualificationIds">) {
+function hesloLevel(text: string) {
+  const normalized = text.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const match = normalized.match(/heslo([234])/);
+  return match ? Number(match[1]) : 0;
+}
+
+export function expandedQualificationIds(person: Pick<Personnel, "qualificationIds">, qualifications: Qualification[] = []) {
   const ids = new Set(person.qualificationIds);
-  if (ids.has("q_heslo4")) {
+  const levelById = new Map(qualifications.map((qualification) => [qualification.id, hesloLevel(`${qualification.id} ${qualification.name}`)]));
+  const highestHeslo = Math.max(0, ...person.qualificationIds.map((id) => Math.max(hesloLevel(id), levelById.get(id) || 0)));
+  if (highestHeslo >= 4) {
+    ids.add("q_heslo4");
     ids.add("q_heslo3");
     ids.add("q_heslo2");
+  } else if (highestHeslo >= 3) {
+    ids.add("q_heslo3");
+    ids.add("q_heslo2");
+  } else if (highestHeslo >= 2) {
+    ids.add("q_heslo2");
   }
-  if (ids.has("q_heslo3")) ids.add("q_heslo2");
+  for (const qualification of qualifications) {
+    const level = hesloLevel(`${qualification.id} ${qualification.name}`);
+    if (level && highestHeslo >= level) ids.add(qualification.id);
+  }
   return ids;
 }
 
-export function qualifiedForBase(person: Personnel, base: Base) {
-  const ids = expandedQualificationIds(person);
+export function qualifiedForBase(person: Personnel, base: Base, qualifications: Qualification[] = []) {
+  const ids = expandedQualificationIds(person, qualifications);
   return base.requiredQualificationIds.every((id) => ids.has(id));
 }
 
@@ -110,7 +127,7 @@ export function validateScheduleAssignments(data: HeliqData, assignments: Schedu
     const person = data.personnel.find((item) => item.id === assignment.personId);
     const base = assignment.baseId ? data.bases.find((item) => item.id === assignment.baseId) : undefined;
     if (!person || !person.active || (person.role !== "pilot" && person.role !== "ts")) errors.push(`${assignment.personId} er ikke aktiv pilot/TS`);
-    if (assignment.status === "work" && base && person && !qualifiedForBase(person, base)) errors.push(`${person.name} mangler kvalifikasjon for ${base.code}`);
+    if (assignment.status === "work" && base && person && !qualifiedForBase(person, base, data.qualifications)) errors.push(`${person.name} mangler kvalifikasjon for ${base.code}`);
     grouped.set(assignment.personId, [...(grouped.get(assignment.personId) || []), assignment]);
   }
   for (const [personId, items] of grouped) {
@@ -139,7 +156,7 @@ export function roleCount(data: HeliqData, base: Base, date: string, role: CrewR
 
 export function bestCandidate(data: HeliqData, base: Base, role: CrewRole, startDate: string, endDate: string) {
   const dates = datesBetween(startDate, endDate);
-  return activeCrew(data).filter((person) => person.role === role && qualifiedForBase(person, base) && validateScheduleAssignments(data, dates.map((date) => ({ personId: person.id, date, status: "work", baseId: base.id }))).length === 0).sort((a, b) => Number(b.homeBaseId === base.id) - Number(a.homeBaseId === base.id) || dutyCount(data, a.id, startDate.slice(0, 4)) - dutyCount(data, b.id, startDate.slice(0, 4)) || personCode(a).localeCompare(personCode(b)))[0];
+  return activeCrew(data).filter((person) => person.role === role && qualifiedForBase(person, base, data.qualifications) && validateScheduleAssignments(data, dates.map((date) => ({ personId: person.id, date, status: "work", baseId: base.id }))).length === 0).sort((a, b) => Number(b.homeBaseId === base.id) - Number(a.homeBaseId === base.id) || dutyCount(data, a.id, startDate.slice(0, 4)) - dutyCount(data, b.id, startDate.slice(0, 4)) || personCode(a).localeCompare(personCode(b)))[0];
 }
 
 export function buildCellCandidateSuggestions(data: HeliqData, date: string): CellCandidateSuggestion[] {
@@ -165,7 +182,7 @@ export function buildCoverageGaps(data: HeliqData, days: string[]): CoverageGap[
     for (const role of ["pilot", "ts"] as const) {
       const missing = role === "pilot" ? missingPilots : missingTs;
       if (!missing) continue;
-      const qualified = activeCrew(data).filter((person) => person.role === role && qualifiedForBase(person, base));
+      const qualified = activeCrew(data).filter((person) => person.role === role && qualifiedForBase(person, base, data.qualifications));
       const candidate = bestCandidate(data, base, role, mondayOnOrBefore(date), addDays(mondayOnOrBefore(date), 13));
       if (qualified.length === 0) reasons.push(`Ingen kvalifisert ${role === "ts" ? "TS" : "pilot"}`);
       else if (!candidate) reasons.push(`Ingen lovlig ${role === "ts" ? "TS" : "pilot"} innen 14/14/årsverk`);

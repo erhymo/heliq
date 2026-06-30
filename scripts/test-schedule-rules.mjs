@@ -42,5 +42,6 @@ assert.equal(rules.validateScheduleAssignments(data([{ id: "p1_2026-03-01", pers
 assert.equal(rules.expandedQualificationIds(person("p3", ["q_heslo4"])).has("q_heslo3"), true, "HESLO 4 should include HESLO 3");
 assert.equal(rules.expandedQualificationIds(person("p3", ["q_heslo4"])).has("q_heslo2"), true, "HESLO 4 should include HESLO 2");
 assert.equal(rules.expandedQualificationIds(person("p4", ["q_heslo3"])).has("q_heslo2"), true, "HESLO 3 should include HESLO 2");
+assert.equal(rules.qualifiedForBase(person("p5", ["custom4"]), { requiredQualificationIds: ["custom3"] }, [{ id: "custom4", name: "HESLO 4" }, { id: "custom3", name: "HESLO 3" }]), true, "HESLO hierarchy should also work by qualification name");
 
 console.log("schedule_rules_tests=ok");
