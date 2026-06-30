@@ -24,6 +24,7 @@ type CoverageProposal = {
 type ScheduleCellSelection = { personId: string; date: string };
 type ScheduleApplyOptions = { personId?: string; baseId?: string; projectId?: string; note?: string; startDate?: string; endDate?: string };
 type CellCandidateSuggestion = { base: Base; role: "pilot" | "ts"; person: Personnel; startDate: string; endDate: string };
+type SchedulePopoverAction = "set" | "remove";
 
 const quickScheduleStatuses: ScheduleStatus[] = ["work", "sold_day", "vacation", "sick", "training", "standby", "travel", "off"];
 const dutyStatuses = new Set<ScheduleStatus>(["work", "project", "training", "standby", "travel"]);
@@ -175,6 +176,13 @@ export default function AdminClient() {
     setCellSelection(null);
   }
 
+  async function removeCellAssignments() {
+    if (!cellSelection || !data) return;
+    const dates = datesBetween(cellSelection.date, cellEndDate);
+    await mutate("removeScheduleAssignments", { assignments: dates.map((date) => ({ personId: cellSelection.personId, date })) });
+    setCellSelection(null);
+  }
+
   async function approveCoverageSuggestion(suggestion: CoverageProposal) {
     await mutate("applyCoverageAssignments", { assignments: suggestion.assignments });
     setDismissedSuggestionIds((ids) => [...ids, suggestion.id]);
@@ -202,7 +210,7 @@ export default function AdminClient() {
         {tab === "schedule" && <CoverageSuggestions suggestions={coverageSuggestions} totalHidden={Math.max(0, coverageSuggestions.length - 12)} onApprove={approveCoverageSuggestion} onDismiss={dismissCoverageSuggestion} />}
         {tab === "schedule" && warnings.length > 0 && <Warnings warnings={warnings} />}
         {tab === "schedule" && <ScheduleGrid people={people} days={days} data={data} assignmentsByKey={assignmentsByKey} selectedPersonId={selectedPersonId} selectedCell={cellSelection} onCell={clickCell} />}
-        {tab === "schedule" && cellSelection && selectedCellPerson && <ScheduleCellPopover key={`${cellSelection.personId}_${cellSelection.date}`} data={data} person={selectedCellPerson} date={cellSelection.date} endDate={cellEndDate} setEndDate={setCellEndDate} assignment={selectedCellAssignment} suggestions={selectedCellSuggestions} onApply={applyCellStatus} onClose={() => setCellSelection(null)} />}
+        {tab === "schedule" && cellSelection && selectedCellPerson && <ScheduleCellPopover key={`${cellSelection.personId}_${cellSelection.date}`} data={data} person={selectedCellPerson} date={cellSelection.date} endDate={cellEndDate} setEndDate={setCellEndDate} assignment={selectedCellAssignment} suggestions={selectedCellSuggestions} onApply={applyCellStatus} onRemove={removeCellAssignments} onClose={() => setCellSelection(null)} />}
         {tab === "people" && <PeoplePanel data={data} mutate={mutate} />}
         {tab === "projects" && <ProjectsPanel data={data} mutate={mutate} />}
         {tab === "bases" && <BasesPanel data={data} mutate={mutate} />}
@@ -262,30 +270,42 @@ function Row({ day, people, assignmentsByKey, projectById, baseById, selectedPer
   })}</>;
 }
 
-function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignment, suggestions, onApply, onClose }: { data: HeliqData; person: Personnel; date: string; endDate: string; setEndDate: (value: string) => void; assignment?: ScheduleAssignment; suggestions: CellCandidateSuggestion[]; onApply: (status: ScheduleStatus, options?: ScheduleApplyOptions) => void; onClose: () => void }) {
+function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignment, suggestions, onApply, onRemove, onClose }: { data: HeliqData; person: Personnel; date: string; endDate: string; setEndDate: (value: string) => void; assignment?: ScheduleAssignment; suggestions: CellCandidateSuggestion[]; onApply: (status: ScheduleStatus, options?: ScheduleApplyOptions) => void; onRemove: () => void; onClose: () => void }) {
   const [baseId, setBaseId] = useState(assignment?.baseId || person.homeBaseId || "");
   const [projectId, setProjectId] = useState(assignment?.projectId || "");
   const [note, setNote] = useState(assignment?.note || "");
   const [selectedStatus, setSelectedStatus] = useState<ScheduleStatus>(assignment?.projectId ? "project" : assignment?.status || "work");
   const [selectedSuggestion, setSelectedSuggestion] = useState<CellCandidateSuggestion | null>(null);
+  const [action, setAction] = useState<SchedulePopoverAction>("set");
   const base = data.bases.find((item) => item.id === baseId);
   const project = data.projects.find((item) => item.id === projectId);
   const baseLabel = base?.code || "ingen base";
-  const canSave = selectedStatus !== "project" || Boolean(projectId);
+  const canSave = action === "remove" || selectedStatus !== "project" || Boolean(projectId);
 
   function chooseStatus(status: ScheduleStatus) {
+    setAction("set");
     setSelectedStatus(status);
     setSelectedSuggestion(null);
   }
 
   function chooseSuggestion(suggestion: CellCandidateSuggestion) {
+    setAction("set");
     setSelectedSuggestion(suggestion);
     setSelectedStatus("work");
     setBaseId(suggestion.base.id);
     setEndDate(suggestion.endDate);
   }
 
+  function chooseRemove() {
+    setAction("remove");
+    setSelectedSuggestion(null);
+  }
+
   function save() {
+    if (action === "remove") {
+      onRemove();
+      return;
+    }
     if (selectedSuggestion) {
       onApply("work", { personId: selectedSuggestion.person.id, baseId: selectedSuggestion.base.id, startDate: selectedSuggestion.startDate, endDate: selectedSuggestion.endDate, note: note || `Systemforslag 14/14 ${selectedSuggestion.base.code}` });
       return;
@@ -309,10 +329,11 @@ function ScheduleCellPopover({ data, person, date, endDate, setEndDate, assignme
         <label className="text-xs font-semibold text-slate-600">Base<select value={baseId} onChange={(event) => setBaseId(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"><option value="">Ingen base</option>{data.bases.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
         <label className="text-xs font-semibold text-slate-600">Prosjekt<select value={projectId} onChange={(event) => { setProjectId(event.target.value); if (event.target.value) chooseStatus("project"); }} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"><option value="">Ingen prosjekt</option>{data.projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       </div>
-      {project && <button onClick={() => chooseStatus("project")} className={`mt-3 w-full rounded-xl px-3 py-2 text-sm font-semibold ${selectedStatus === "project" ? "bg-blue-700 text-white ring-2 ring-blue-300" : "bg-blue-600 text-white hover:bg-blue-700"}`}>Prosjekt · {project.name}</button>}
+      {project && <button onClick={() => chooseStatus("project")} className={`mt-3 w-full rounded-xl px-3 py-2 text-sm font-semibold ${action === "set" && selectedStatus === "project" ? "bg-blue-700 text-white ring-2 ring-blue-300" : "bg-blue-600 text-white hover:bg-blue-700"}`}>Prosjekt · {project.name}</button>}
       <div className="mt-3 grid grid-cols-2 gap-2">
-        {quickScheduleStatuses.map((status) => <button key={status} onClick={() => chooseStatus(status)} className={`rounded-xl border px-3 py-2 text-sm font-semibold hover:border-blue-300 hover:bg-blue-50 ${selectedStatus === status && !selectedSuggestion ? "border-blue-500 bg-blue-50 text-blue-900 ring-2 ring-blue-100" : "border-slate-200 bg-slate-50 text-slate-800"}`}>{status === "work" ? `Jobb · ${baseLabel}` : statusLabels[status]}</button>)}
+        {quickScheduleStatuses.map((status) => <button key={status} onClick={() => chooseStatus(status)} className={`rounded-xl border px-3 py-2 text-sm font-semibold hover:border-blue-300 hover:bg-blue-50 ${action === "set" && selectedStatus === status && !selectedSuggestion ? "border-blue-500 bg-blue-50 text-blue-900 ring-2 ring-blue-100" : "border-slate-200 bg-slate-50 text-slate-800"}`}>{status === "work" ? `Jobb · ${baseLabel}` : statusLabels[status]}</button>)}
       </div>
+      {assignment && <button onClick={chooseRemove} className={`mt-2 w-full rounded-xl border px-3 py-2 text-sm font-semibold ${action === "remove" ? "border-rose-500 bg-rose-50 text-rose-900 ring-2 ring-rose-100" : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"}`}>Fjern markering</button>}
       <input value={note} onChange={(event) => setNote(event.target.value)} className="mt-3 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900" placeholder="Notat (valgfritt)" />
       <div className="mt-3 flex gap-2 border-t border-slate-100 pt-3">
         <button onClick={onClose} className="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Avbryt</button>
