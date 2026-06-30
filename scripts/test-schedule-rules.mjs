@@ -39,5 +39,8 @@ assert.match(rules.validateScheduleAssignments(data(dates("2026-01-05", 183).map
 assert.equal(rules.validateScheduleAssignments(data(dates("2026-01-05", 183).map((date) => assignment("p1", date))), [{ personId: "p1", date: "2026-12-31", status: "sold_day" }]).length, 0, "sold day should not count as duty");
 assert.match(rules.validateScheduleAssignments(data(), [assignment("p2", "2026-02-02")]).join("\n"), /mangler kvalifikasjon/, "missing base qualification should fail");
 assert.equal(rules.validateScheduleAssignments(data([{ id: "p1_2026-03-01", personId: "p1", date: "2026-03-01", status: "vacation" }]), [assignment("p1", "2026-03-01")]).length, 0, "same-day overwrite should be allowed");
+assert.equal(rules.expandedQualificationIds(person("p3", ["q_heslo4"])).has("q_heslo3"), true, "HESLO 4 should include HESLO 3");
+assert.equal(rules.expandedQualificationIds(person("p3", ["q_heslo4"])).has("q_heslo2"), true, "HESLO 4 should include HESLO 2");
+assert.equal(rules.expandedQualificationIds(person("p4", ["q_heslo3"])).has("q_heslo2"), true, "HESLO 3 should include HESLO 2");
 
 console.log("schedule_rules_tests=ok");

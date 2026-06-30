@@ -39,8 +39,19 @@ export function annualDutyLimit(year: number) {
   return Math.ceil(daysInYear(year).length / 2);
 }
 
+export function expandedQualificationIds(person: Pick<Personnel, "qualificationIds">) {
+  const ids = new Set(person.qualificationIds);
+  if (ids.has("q_heslo4")) {
+    ids.add("q_heslo3");
+    ids.add("q_heslo2");
+  }
+  if (ids.has("q_heslo3")) ids.add("q_heslo2");
+  return ids;
+}
+
 export function qualifiedForBase(person: Personnel, base: Base) {
-  return base.requiredQualificationIds.every((id) => person.qualificationIds.includes(id));
+  const ids = expandedQualificationIds(person);
+  return base.requiredQualificationIds.every((id) => ids.has(id));
 }
 
 function assignmentId(assignment: Pick<ScheduleAssignment, "personId" | "date">) {

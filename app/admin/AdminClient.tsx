@@ -501,10 +501,7 @@ type PersonForm = {
 const emptyPersonForm: PersonForm = { name: "", code: "", role: "pilot", active: true, homeBaseId: "", phone: "", email: "", qualificationIds: [], adr: false, vehicleIds: [], trailerIds: [], note: "", pin: "" };
 
 function PeoplePanel({ data, mutate }: { data: HeliqData; mutate: (action: string, payload: Record<string, unknown>) => Promise<void> }) {
-  const [person, setPerson] = useState<PersonForm>(emptyPersonForm);
-  const editing = Boolean(person.id);
-  const roleQualifications = data.qualifications.filter((qualification) => qualification.kind === "both" || qualification.kind === person.role);
-  const baseLabels = { "": "Ingen", ...Object.fromEntries(data.bases.map((base) => [base.id, `${base.code} · ${base.name}`])) };
+  const [person, setPerson] = useState<PersonForm | null>(null);
   const pilots = data.personnel.filter((item) => item.role === "pilot").sort((a, b) => personCode(a).localeCompare(personCode(b)));
   const taskSpecialists = data.personnel.filter((item) => item.role === "ts").sort((a, b) => personCode(a).localeCompare(personCode(b)));
 
@@ -514,24 +511,41 @@ function PeoplePanel({ data, mutate }: { data: HeliqData; mutate: (action: strin
 
   async function savePerson(event: FormEvent) {
     event.preventDefault();
+    if (!person) return;
     await mutate("upsertPersonnel", { personnel: { ...person, homeBaseId: person.homeBaseId || undefined, pin: person.pin || undefined } });
-    setPerson(emptyPersonForm);
+    setPerson(null);
   }
 
   return (
     <Panel title="Personell">
-      <form onSubmit={savePerson} className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="font-semibold">{editing ? `Rediger ${person.name}` : "Legg til person"}</h3>
-            <p className="text-sm text-slate-600">Kode lages automatisk fra de tre første bokstavene i etternavnet. Piloter står til venstre, TS til høyre.</p>
-          </div>
-          {editing && <button type="button" onClick={() => setPerson(emptyPersonForm)} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold">Avbryt</button>}
-        </div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-slate-600">Trykk på en ansatt for å redigere. Kode lages automatisk fra etternavn.</p>
+        <button type="button" onClick={() => setPerson(emptyPersonForm)} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white">Legg til person</button>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <PersonColumn title="Piloter" people={pilots} data={data} onClick={editPerson} />
+        <PersonColumn title="Lastemenn/TS" people={taskSpecialists} data={data} onClick={editPerson} />
+      </div>
+      {person && <PersonEditorModal data={data} person={person} setPerson={setPerson} onSubmit={savePerson} onClose={() => setPerson(null)} />}
+    </Panel>
+  );
+}
 
+function PersonColumn({ title, people, data, onClick }: { title: string; people: Personnel[]; data: HeliqData; onClick: (person: Personnel) => void }) {
+  return <section><h3 className="mb-2 text-sm font-bold uppercase tracking-[0.18em] text-slate-500">{title}</h3><div className="grid gap-2">{people.map((item) => <PersonCard key={item.id} person={item} data={data} onClick={() => onClick(item)} />)}</div></section>;
+}
+
+function PersonEditorModal({ data, person, setPerson, onSubmit, onClose }: { data: HeliqData; person: PersonForm; setPerson: (person: PersonForm) => void; onSubmit: (event: FormEvent) => void; onClose: () => void }) {
+  const editing = Boolean(person.id);
+  const roleQualifications = data.qualifications.filter((qualification) => qualification.kind === "both" || qualification.kind === person.role);
+  const baseLabels = { "": "Ingen", ...Object.fromEntries(data.bases.map((base) => [base.id, `${base.code} · ${base.name}`])) };
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-slate-950/30 p-4 pt-16 backdrop-blur-sm">
+      <form onSubmit={onSubmit} className="grid w-full max-w-4xl gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-500">Personell</p><h3 className="mt-1 text-lg font-semibold text-slate-950">{editing ? `Rediger ${person.name}` : "Legg til person"}</h3></div><button type="button" onClick={onClose} className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-50">Lukk</button></div>
         <div className="grid gap-3 md:grid-cols-4">
           <Input label="Navn" value={person.name} onChange={(v) => setPerson({ ...person, name: v })} />
-          <div className="rounded-xl border border-slate-200 bg-white px-3 py-2"><p className="text-sm font-semibold text-slate-600">Kode</p><p className="mt-1 text-lg font-black text-slate-900">{person.name ? shortCodeFromText(person.name) : person.code || "—"}</p></div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><p className="text-sm font-semibold text-slate-600">Kode</p><p className="mt-1 text-lg font-black text-slate-900">{person.name ? shortCodeFromText(person.name) : person.code || "—"}</p></div>
           <Select label="Rolle" value={person.role} onChange={(v) => setPerson({ ...person, role: v as Exclude<Role, "admin">, qualificationIds: person.qualificationIds.filter((id) => data.qualifications.some((q) => q.id === id && (q.kind === "both" || q.kind === v))) })} options={["pilot", "ts"]} labels={{ pilot: "Pilot", ts: "Lastemann/TS" }} />
           <Select label="Hovedbase" value={person.homeBaseId} onChange={(v) => setPerson({ ...person, homeBaseId: v })} options={["", ...data.bases.map((base) => base.id)]} labels={baseLabels} />
           <Input label="Telefon" value={person.phone} onChange={(v) => setPerson({ ...person, phone: v })} />
@@ -539,26 +553,12 @@ function PeoplePanel({ data, mutate }: { data: HeliqData; mutate: (action: strin
           <Input label={editing ? "Ny PIN (valgfritt)" : "PIN"} value={person.pin} onChange={(v) => setPerson({ ...person, pin: v.replace(/[^0-9]/g, "").slice(0, 4) })} />
           <label className="flex items-center gap-2 self-end rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={person.active} onChange={(e) => setPerson({ ...person, active: e.target.checked })} /> Aktiv</label>
         </div>
-
         <CheckboxList title="Kvalifikasjoner" items={roleQualifications.map((qualification) => ({ id: qualification.id, label: qualification.name }))} selected={person.qualificationIds} onChange={(qualificationIds) => setPerson({ ...person, qualificationIds })} emptyText="Ingen kvalifikasjoner opprettet for valgt rolle." />
-
-        {person.role === "ts" && (
-          <div className="grid gap-3 lg:grid-cols-3">
-            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={person.adr} onChange={(e) => setPerson({ ...person, adr: e.target.checked, qualificationIds: e.target.checked ? [...new Set([...person.qualificationIds, "q_adr"])] : person.qualificationIds.filter((id) => id !== "q_adr") })} /> ADR</label>
-            <CheckboxList title="Bil" items={data.vehicles.map((name) => ({ id: name, label: name }))} selected={person.vehicleIds} onChange={(vehicleIds) => setPerson({ ...person, vehicleIds })} emptyText="Ingen biler opprettet." />
-            <CheckboxList title="Henger" items={data.trailers.map((name) => ({ id: name, label: name }))} selected={person.trailerIds} onChange={(trailerIds) => setPerson({ ...person, trailerIds })} emptyText="Ingen hengere opprettet." />
-          </div>
-        )}
-
+        {person.role === "ts" && <div className="grid gap-3 lg:grid-cols-3"><label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={person.adr} onChange={(e) => setPerson({ ...person, adr: e.target.checked, qualificationIds: e.target.checked ? [...new Set([...person.qualificationIds, "q_adr"])] : person.qualificationIds.filter((id) => id !== "q_adr") })} /> ADR</label><CheckboxList title="Bil" items={data.vehicles.map((name) => ({ id: name, label: name }))} selected={person.vehicleIds} onChange={(vehicleIds) => setPerson({ ...person, vehicleIds })} emptyText="Ingen biler opprettet." /><CheckboxList title="Henger" items={data.trailers.map((name) => ({ id: name, label: name }))} selected={person.trailerIds} onChange={(trailerIds) => setPerson({ ...person, trailerIds })} emptyText="Ingen hengere opprettet." /></div>}
         <Input label="Notat" value={person.note} onChange={(v) => setPerson({ ...person, note: v })} />
-        <button className="w-fit rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white">{editing ? "Lagre endringer" : "Legg til"}</button>
+        <div className="flex justify-end gap-2 border-t border-slate-100 pt-3"><button type="button" onClick={onClose} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Avbryt</button><button className="rounded-xl bg-slate-900 px-5 py-2 text-sm font-semibold text-white">OK</button></div>
       </form>
-
-      <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <section><h3 className="mb-2 text-sm font-bold uppercase tracking-[0.18em] text-slate-500">Piloter</h3><div className="grid gap-3">{pilots.map((item) => <PersonCard key={item.id} person={item} data={data} selected={item.id === person.id} onClick={() => editPerson(item)} />)}</div></section>
-        <section><h3 className="mb-2 text-sm font-bold uppercase tracking-[0.18em] text-slate-500">Lastemenn/TS</h3><div className="grid gap-3">{taskSpecialists.map((item) => <PersonCard key={item.id} person={item} data={data} selected={item.id === person.id} onClick={() => editPerson(item)} />)}</div></section>
-      </div>
-    </Panel>
+    </div>
   );
 }
 
@@ -566,10 +566,10 @@ function CheckboxList({ title, items, selected, onChange, emptyText }: { title: 
   return <div className="rounded-xl border border-slate-200 bg-white p-3"><p className="text-sm font-semibold text-slate-600">{title}</p>{items.length === 0 ? <p className="mt-2 text-sm text-slate-500">{emptyText}</p> : <div className="mt-2 flex flex-wrap gap-2">{items.map((item) => <label key={item.id} className={`rounded-full border px-3 py-1.5 text-sm font-semibold ${selected.includes(item.id) ? "border-blue-600 bg-blue-50 text-blue-800" : "border-slate-300 bg-white text-slate-700"}`}><input type="checkbox" className="sr-only" checked={selected.includes(item.id)} onChange={() => onChange(selected.includes(item.id) ? selected.filter((id) => id !== item.id) : [...selected, item.id])} />{item.label}</label>)}</div>}</div>;
 }
 
-function PersonCard({ person, data, selected, onClick }: { person: Personnel; data: HeliqData; selected: boolean; onClick: () => void }) {
+function PersonCard({ person, data, onClick }: { person: Personnel; data: HeliqData; onClick: () => void }) {
   const qualificationNames = person.qualificationIds.map((id) => data.qualifications.find((qualification) => qualification.id === id)?.name).filter(Boolean).join(", ");
   const base = data.bases.find((item) => item.id === person.homeBaseId);
-  return <button type="button" onClick={onClick} className={`rounded-xl border bg-slate-50 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50 ${selected ? "border-blue-600 ring-2 ring-blue-100" : "border-slate-200"}`}><h3 className="font-semibold">{personCode(person)} · {person.name}</h3><p className="mt-1 text-sm text-slate-600">{person.role === "ts" ? "Lastemann/TS" : "Pilot"}{base ? ` · ${base.code}` : ""}{person.active ? "" : " · Inaktiv"}</p><p className="mt-2 text-xs text-slate-500">{qualificationNames || "Ingen kvalifikasjoner"}</p></button>;
+  return <button type="button" onClick={onClick} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-blue-400 hover:bg-blue-50"><h3 className="font-semibold">{personCode(person)} · {person.name}</h3><p className="mt-1 text-sm text-slate-600">{person.role === "ts" ? "Lastemann/TS" : "Pilot"}{base ? ` · ${base.code}` : ""}{person.active ? "" : " · Inaktiv"}</p><p className="mt-2 truncate text-xs text-slate-500" title={qualificationNames}>{qualificationNames || "Ingen kvalifikasjoner"}</p></button>;
 }
 
 type ProjectForm = {
